@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 
@@ -44,6 +45,7 @@ type sendMessageRequest struct {
 func TelegramWebhook(c *gin.Context) {
 	var update telegramUpdate
 	if err := c.ShouldBindJSON(&update); err != nil {
+		log.Printf("telegram webhook: failed to bind json: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
 		return
 	}
@@ -55,6 +57,7 @@ func TelegramWebhook(c *gin.Context) {
 
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
+		log.Printf("telegram webhook: TELEGRAM_BOT_TOKEN is not set")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "missing TELEGRAM_BOT_TOKEN"})
 		return
 	}
@@ -66,6 +69,7 @@ func TelegramWebhook(c *gin.Context) {
 
 	payload, err := json.Marshal(reply)
 	if err != nil {
+		log.Printf("telegram webhook: failed to marshal reply: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to marshal reply"})
 		return
 	}
@@ -73,6 +77,7 @@ func TelegramWebhook(c *gin.Context) {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
+		log.Printf("telegram webhook: failed to create http request: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create request"})
 		return
 	}
@@ -80,12 +85,14 @@ func TelegramWebhook(c *gin.Context) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		log.Printf("telegram webhook: http call to telegram failed: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to call telegram"})
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("telegram webhook: telegram returned non-2xx status: %d", resp.StatusCode)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "telegram returned non-2xx"})
 		return
 	}
