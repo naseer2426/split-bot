@@ -21,6 +21,7 @@ func main() {
 	// db.AutoMigrate()
 
 	router.GET("/", api.HealthCheck)
+	router.POST("/telegram/webhook", api.TelegramWebhook)
 
 	port := os.Getenv("PORT")
 	if port == "" {
