@@ -8,7 +8,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	"github.com/naseer2426/go-backend-template/internal/api"
+	"github.com/naseer2426/split-bot/internal/api"
 )
 
 func main() {

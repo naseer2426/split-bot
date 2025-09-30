@@ -1,4 +1,4 @@
-module github.com/naseer2426/go-backend-template
+module github.com/naseer2426/split-bot
 
 go 1.23.0
 
