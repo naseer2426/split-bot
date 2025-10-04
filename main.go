@@ -6,9 +6,12 @@ import (
 	"os"
 
 	"github.com/gin-contrib/cors"
+	"github.com/gin-contrib/requestid"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/naseer2426/split-bot/internal/api"
+	"github.com/naseer2426/split-bot/internal/splitbot"
+	"github.com/naseer2426/split-bot/internal/telegram"
 )
 
 func main() {
@@ -17,11 +20,12 @@ func main() {
 		panic(err)
 	}
 	router := initRouter()
+	t := initTelegramWebhook()
 	// run migrations
 	// db.AutoMigrate()
 
 	router.GET("/", api.HealthCheck)
-	router.POST("/telegram/webhook", api.TelegramWebhook)
+	router.POST("/telegram/webhook", t.TelegramWebhook)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -46,6 +50,8 @@ func initEnv() error {
 
 func initRouter() *gin.Engine {
 	router := gin.Default()
+
+	router.Use(requestid.New())
 	// Allow CORS for all origins
 	router.Use(cors.New(cors.Config{
 		AllowAllOrigins: true,
@@ -55,4 +61,11 @@ func initRouter() *gin.Engine {
 	}))
 
 	return router
+}
+
+func initTelegramWebhook() *api.TelegramWebhook {
+	return &api.TelegramWebhook{
+		TelegramAPI: telegram.NewTelegramAPI(os.Getenv("TELEGRAM_BOT_TOKEN")),
+		SplitBot:    splitbot.NewBot(),
+	}
 }
