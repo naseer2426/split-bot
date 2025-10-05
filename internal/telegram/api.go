@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -11,9 +12,9 @@ type TelegramAPI struct {
 	client *resty.Client
 }
 
-func NewTelegramAPI(token string) *TelegramAPI {
+func NewTelegramAPI() *TelegramAPI {
 	return &TelegramAPI{
-		token:  token,
+		token:  os.Getenv("TELEGRAM_BOT_TOKEN"),
 		client: resty.New(),
 	}
 }

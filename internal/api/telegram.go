@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-contrib/requestid"
 	"github.com/gin-gonic/gin"
+	"github.com/naseer2426/split-bot/internal/ocr"
 	"github.com/naseer2426/split-bot/internal/splitbot"
 	"github.com/naseer2426/split-bot/internal/telegram"
 )
@@ -16,6 +17,15 @@ import (
 type TelegramWebhook struct {
 	SplitBot    *splitbot.Bot
 	TelegramAPI *telegram.TelegramAPI
+	OCR         ocr.ImageOCR
+}
+
+func NewTelegramWebhook() *TelegramWebhook {
+	return &TelegramWebhook{
+		TelegramAPI: telegram.NewTelegramAPI(),
+		SplitBot:    splitbot.NewBot(),
+		OCR:         ocr.NewMistralOCR(),
+	}
 }
 
 func (t *TelegramWebhook) TelegramWebhook(c *gin.Context) {
@@ -67,6 +77,58 @@ func (t *TelegramWebhook) parseBody(c *gin.Context) (*telegram.Update, error) {
 	return &update, nil
 }
 
+func (t *TelegramWebhook) handlePhotoMessage(msg *splitbot.Message, photos []telegram.Photo, caption string, requestID string) error {
+	highestResPhoto := photos[len(photos)-1]
+
+	// Get the image URL
+	url, err := t.TelegramAPI.GetImageUrl(requestID, highestResPhoto.FileID)
+	if err != nil {
+		return errors.New("failed to get image URL")
+	}
+
+	// Extract text from image using OCR
+	extractedText, err := t.OCR.ExtractTextFromImage(requestID, url)
+	if err != nil {
+		log.Printf("OCR extraction failed for photo: %v", err)
+		extractedText = "OCR extraction failed"
+	}
+
+	msg.Image = &splitbot.Image{
+		FileID:        highestResPhoto.FileID,
+		Url:           url,
+		ExtractedText: extractedText,
+	}
+	if len(caption) > 0 {
+		msg.Text = caption
+	}
+	return nil
+}
+
+func (t *TelegramWebhook) handleDocumentMessage(msg *splitbot.Message, document *telegram.Document, caption string, requestID string) error {
+	// Get the image URL
+	url, err := t.TelegramAPI.GetImageUrl(requestID, document.FileID)
+	if err != nil {
+		return errors.New("failed to get image URL")
+	}
+
+	// Extract text from image using OCR
+	extractedText, err := t.OCR.ExtractTextFromImage(requestID, url)
+	if err != nil {
+		log.Printf("OCR extraction failed for document: %v", err)
+		extractedText = "OCR extraction failed"
+	}
+
+	msg.Image = &splitbot.Image{
+		FileID:        document.FileID,
+		Url:           url,
+		ExtractedText: extractedText,
+	}
+	if len(caption) > 0 {
+		msg.Text = caption
+	}
+	return nil
+}
+
 func (t *TelegramWebhook) preProcessMsg(c *gin.Context) (*splitbot.Message, int64, error) {
 	update, err := t.parseBody(c)
 	if err != nil {
@@ -86,30 +148,16 @@ func (t *TelegramWebhook) preProcessMsg(c *gin.Context) (*splitbot.Message, int6
 		}
 	}
 	if len(update.Message.Photo) > 0 {
-		highestResPhoto := update.Message.Photo[len(update.Message.Photo)-1]
-
-		// Get the image URL
-		imagePath, err := t.TelegramAPI.GetImageUrl(requestID, highestResPhoto.FileID)
-		if err != nil {
-			return nil, 0, errors.New("failed to get image URL")
+		if err := t.handlePhotoMessage(msg, update.Message.Photo, update.Message.Caption, requestID); err != nil {
+			return nil, 0, err
 		}
-
-		msg.ImagePath = imagePath
-		msg.Text = update.Message.Caption
-
-		// the message can eithe contain image or document
+		// the message can either contain image or document
 		return msg, update.Message.Chat.ID, nil
 	}
 	if update.Message.Document != nil {
-		// Get the image URL
-		imagePath, err := t.TelegramAPI.GetImageUrl(requestID, update.Message.Document.FileID)
-		if err != nil {
-			return nil, 0, errors.New("failed to get image URL")
+		if err := t.handleDocumentMessage(msg, update.Message.Document, update.Message.Caption, requestID); err != nil {
+			return nil, 0, err
 		}
-
-		msg.ImagePath = imagePath
-		msg.Text = update.Message.Caption
-
 		return msg, update.Message.Chat.ID, nil
 	}
 	return msg, update.Message.Chat.ID, nil

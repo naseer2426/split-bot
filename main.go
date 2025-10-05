@@ -10,8 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"github.com/naseer2426/split-bot/internal/api"
-	"github.com/naseer2426/split-bot/internal/splitbot"
-	"github.com/naseer2426/split-bot/internal/telegram"
 )
 
 func main() {
@@ -20,7 +18,7 @@ func main() {
 		panic(err)
 	}
 	router := initRouter()
-	t := initTelegramWebhook()
+	t := api.NewTelegramWebhook()
 	// run migrations
 	// db.AutoMigrate()
 
@@ -61,11 +59,4 @@ func initRouter() *gin.Engine {
 	}))
 
 	return router
-}
-
-func initTelegramWebhook() *api.TelegramWebhook {
-	return &api.TelegramWebhook{
-		TelegramAPI: telegram.NewTelegramAPI(os.Getenv("TELEGRAM_BOT_TOKEN")),
-		SplitBot:    splitbot.NewBot(),
-	}
 }

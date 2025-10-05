@@ -3,6 +3,7 @@ package ocr
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -79,9 +80,9 @@ type MistralOCR struct {
 	client *resty.Client
 }
 
-func NewMistralOCR(apiKey string) *MistralOCR {
+func NewMistralOCR() *MistralOCR {
 	return &MistralOCR{
-		apiKey: apiKey,
+		apiKey: os.Getenv("MISTRAL_API_KEY"),
 		client: resty.New(),
 	}
 }
