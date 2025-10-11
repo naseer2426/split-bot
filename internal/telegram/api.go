@@ -2,6 +2,8 @@ package telegram
 
 import (
 	"fmt"
+	"log"
+	"net/url"
 	"os"
 
 	"github.com/go-resty/resty/v2"
@@ -12,11 +14,13 @@ type TelegramAPI struct {
 	client *resty.Client
 }
 
-func NewTelegramAPI() *TelegramAPI {
-	return &TelegramAPI{
+func NewTelegramAPI(whPath string) *TelegramAPI {
+	t := &TelegramAPI{
 		token:  os.Getenv("TELEGRAM_BOT_TOKEN"),
 		client: resty.New(),
 	}
+	t.setWebhook(whPath)
+	return t
 }
 
 // SendMessage sends a message to a Telegram chat
@@ -87,4 +91,41 @@ func (t *TelegramAPI) GetImageUrl(requestID, fileId string) (string, error) {
 	imageURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", token, fileResponse.Result.FilePath)
 
 	return imageURL, nil
+}
+
+func (t *TelegramAPI) setWebhook(whPath string) {
+	base := os.Getenv("BACKEND_URL")
+	if base == "" {
+		return
+	}
+	webhook, err := url.JoinPath(base, whPath)
+	if err != nil {
+		panic(err)
+	}
+
+	token := t.token
+	if token == "" {
+		panic(fmt.Errorf("TELEGRAM_BOT_TOKEN is not set"))
+	}
+
+	var setWbResp struct {
+		OK          bool   `json:"ok"`
+		Result      bool   `json:"result"`
+		Description string `json:"description"`
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/setWebhook?url=%s", token, webhook)
+	resp, err := t.client.R().SetDebug(true).SetResult(&setWbResp).Get(url)
+	if err != nil {
+		panic(err)
+	}
+
+	if resp.StatusCode() != 200 {
+		panic(fmt.Errorf("set webhook response %d", resp.StatusCode()))
+	}
+
+	if !setWbResp.OK || !setWbResp.Result {
+		panic(fmt.Errorf("set webhook response not ok %+v", setWbResp))
+	}
+	log.Printf("webhook %s set successfully", base)
 }

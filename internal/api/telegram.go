@@ -14,6 +14,10 @@ import (
 	"github.com/naseer2426/split-bot/internal/telegram"
 )
 
+const (
+	TelegramWebhookPath = "/telegram/webhook"
+)
+
 type TelegramWebhook struct {
 	SplitBot    *splitbot.Bot
 	TelegramAPI *telegram.TelegramAPI
@@ -21,11 +25,12 @@ type TelegramWebhook struct {
 }
 
 func NewTelegramWebhook() *TelegramWebhook {
-	return &TelegramWebhook{
-		TelegramAPI: telegram.NewTelegramAPI(),
+	tw := &TelegramWebhook{
+		TelegramAPI: telegram.NewTelegramAPI(TelegramWebhookPath),
 		SplitBot:    splitbot.NewBot(),
 		OCR:         ocr.NewMistralOCR(),
 	}
+	return tw
 }
 
 func (t *TelegramWebhook) TelegramWebhook(c *gin.Context) {

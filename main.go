@@ -19,11 +19,9 @@ func main() {
 	}
 	router := initRouter()
 	t := api.NewTelegramWebhook()
-	// run migrations
-	// db.AutoMigrate()
 
 	router.GET("/", api.HealthCheck)
-	router.POST("/telegram/webhook", t.TelegramWebhook)
+	router.POST(api.TelegramWebhookPath, t.TelegramWebhook)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -53,7 +51,7 @@ func initRouter() *gin.Engine {
 	// Allow CORS for all origins
 	router.Use(cors.New(cors.Config{
 		AllowAllOrigins: true,
-		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowMethods:    []string{"GET", "POST"},
 		AllowHeaders:    []string{"Origin", "Content-Length", "Content-Type", "Authorization", "Accept", "X-Requested-With"},
 		ExposeHeaders:   []string{"Content-Length"},
 	}))
