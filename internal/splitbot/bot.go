@@ -39,7 +39,7 @@ func NewBot() *Bot {
 	if err != nil {
 		panic(err)
 	}
-	agent := agents.NewConversationalAgent( //TODO: check if this agent is the correct one to use
+	agent := agents.NewConversationalAgent(
 		llm,
 		nil, //TODO: add tools here: calculator, google sheets
 		agents.WithPromptPrefix(splitBotSystemPrompt), //TODO: update this for system prompt
