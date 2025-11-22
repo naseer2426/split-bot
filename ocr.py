@@ -59,7 +59,8 @@ async def process_image_with_mistral_ocr(image_url: str) -> Optional[str]:
             # Handle different status codes
             if response.status_code == 200:
                 result = response.json()
-                
+                if logger:
+                    logger.info(f"ocr result {result}") 
                 # Extract markdown from the first page
                 pages = result.get('pages', [])
                 if len(pages) != 1:

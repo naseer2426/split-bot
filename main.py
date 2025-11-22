@@ -18,20 +18,30 @@ logger = logging.getLogger(__name__)
 set_logger(logger)
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming images and perform OCR."""
-    if not update.message or not update.message.photo:
+    """Handle incoming images and file attachments, performing OCR."""
+    if not update.message:
         return
     
-    # Get the largest photo size
-    photo = update.message.photo[-1]
+    # Determine if it's a photo or document
+    file_id = None
+    if update.message.photo:
+        # Get the largest photo size
+        photo = update.message.photo[-1]
+        file_id = photo.file_id
+    elif update.message.document:
+        # Handle file attachments (documents)
+        document = update.message.document
+        file_id = document.file_id
+    else:
+        return
     
     # Send a "processing" message
     processing_msg = await update.message.reply_text("Processing image with OCR...")
     
     try:
         # Get the file object to retrieve the image URL
-        logger.info(f"Fetching file path for - {photo.file_id}")
-        file = await context.bot.get_file(photo.file_id)
+        logger.info(f"Fetching file path for - {file_id}")
+        file = await context.bot.get_file(file_id)
         
         # Check if file_path exists
         if not file.file_path:
@@ -39,7 +49,6 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         
         # file.file_path already contains the full URL, use it directly
         image_url = file.file_path
-        logger.info(f"Using image URL: {image_url}")
         
         # Process the image with OCR using the URL
         extracted_text = await process_image_with_mistral_ocr(image_url)
@@ -48,7 +57,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await processing_msg.delete()
         
         if extracted_text:
-            await update.message.reply_text(f"Extracted text:\n\n{extracted_text}")
+            await update.message.reply_text(extracted_text)
         else:
             await update.message.reply_text("Sorry, I couldn't extract any text from the image.")
             
@@ -72,8 +81,8 @@ def main() -> None:
 
     application = Application.builder().token(token).build()
 
-    # Handle images with OCR (add before text handler so images are processed first)
-    application.add_handler(MessageHandler(filters.PHOTO, handle_image))
+    # Handle images and file attachments with OCR (add before text handler so images are processed first)
+    application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     
     # Handle text messages - echo the message on Telegram
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
