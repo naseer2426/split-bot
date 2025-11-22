@@ -8,9 +8,15 @@ from ocr import process_image_with_mistral_ocr, set_logger
 # Load environment variables
 load_dotenv()
 
+# Determine environment
+ENV = os.getenv("ENV", "development").lower()
+IS_DEV = ENV in ["dev", "development"]
+IS_PROD = ENV in ["prod", "production"]
+
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", 
+    level=logging.DEBUG if IS_DEV else logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -87,8 +93,41 @@ def main() -> None:
     # Handle text messages - echo the message on Telegram
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-    # Run the bot until the user presses Ctrl-C
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Run the bot based on environment
+    if IS_PROD:
+        # Production mode: use webhook
+        webhook_url = os.getenv("BOT_WEBHOOK")
+        port = os.getenv("PORT")
+        
+        if not webhook_url:
+            logger.error("BOT_WEBHOOK not found in environment variables for production mode.")
+            print("Error: BOT_WEBHOOK not found. Please set it in .env file.")
+            return
+        
+        if not port:
+            logger.error("PORT not found in environment variables for production mode.")
+            print("Error: PORT not found. Please set it in .env file.")
+            return
+        
+        try:
+            port = int(port)
+        except ValueError:
+            logger.error(f"Invalid PORT value: {port}. Must be an integer.")
+            print(f"Error: Invalid PORT value: {port}. Must be an integer.")
+            return
+        
+        logger.info(f"Starting bot in production mode with webhook: {webhook_url} on port {port}")
+        application.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path="/webhook",
+            webhook_url=webhook_url,
+            allowed_updates=Update.ALL_TYPES
+        )
+    else:
+        # Development mode: use polling
+        logger.info("Starting bot in development mode with polling")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
