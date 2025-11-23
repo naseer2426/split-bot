@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from telegram import Update, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from ocr import process_image_with_mistral_ocr, set_logger
+from ai import process_message
 
 # Load environment variables
 load_dotenv()
@@ -72,9 +73,26 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await processing_msg.delete()
         await update.message.reply_text(f"Error processing image: {str(e)}")
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Echo the user message."""
-    await update.message.reply_text(update.message.text)
+async def handle_by_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle text messages by processing them with AI."""
+    if not update.message or not update.message.text:
+        return
+    
+    # Send a "processing" message
+    processing_msg = await update.message.reply_text("Processing with AI...")
+    
+    try:
+        # Process the message with AI
+        ai_response = process_message(update.message.text)
+        
+        # Delete the processing message and send the AI response
+        await processing_msg.delete()
+        await update.message.reply_text(ai_response)
+        
+    except Exception as e:
+        logger.error(f"Error processing message with AI: {str(e)}")
+        await processing_msg.delete()
+        await update.message.reply_text(f"Error processing message: {str(e)}")
 
 def main() -> None:
     """Start the bot."""
@@ -90,8 +108,8 @@ def main() -> None:
     # Handle images and file attachments with OCR (add before text handler so images are processed first)
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     
-    # Handle text messages - echo the message on Telegram
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+    # Handle text messages - process with AI
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_by_ai))
 
     # Run the bot based on environment
     if IS_PROD:
@@ -101,19 +119,16 @@ def main() -> None:
         
         if not webhook_url:
             logger.error("BOT_WEBHOOK not found in environment variables for production mode.")
-            print("Error: BOT_WEBHOOK not found. Please set it in .env file.")
             return
         
         if not port:
             logger.error("PORT not found in environment variables for production mode.")
-            print("Error: PORT not found. Please set it in .env file.")
             return
         
         try:
             port = int(port)
         except ValueError:
             logger.error(f"Invalid PORT value: {port}. Must be an integer.")
-            print(f"Error: Invalid PORT value: {port}. Must be an integer.")
             return
         
         logger.info(f"Starting bot in production mode with webhook: {webhook_url} on port {port}")
