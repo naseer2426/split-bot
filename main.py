@@ -78,12 +78,18 @@ async def handle_by_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message or not update.message.text:
         return
     
+    # Get group/chat ID (works for both groups and private chats)
+    group_id = str(update.message.chat.id)
+    
     # Send a "processing" message
     processing_msg = await update.message.reply_text("Processing with AI...")
     
     try:
-        # Process the message with AI
-        ai_response = process_message(update.message.text)
+        # Process the message with AI (including conversation history)
+        ai_response = process_message(
+            message=update.message.text,
+            group_id=group_id,
+        )
         
         # Delete the processing message and send the AI response
         await processing_msg.delete()
