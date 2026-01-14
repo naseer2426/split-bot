@@ -135,7 +135,7 @@ def add_expense(request_json: str) -> str:
         request_json: A JSON string representing the AddExpenseRequest. Format:
         {
             "cost": "26",
-            "description": "The name of the restaurant or the item being split",
+            "description": "The name of the restaurant or the item being split. This will be used as the expense title in Splitwise.",
             "details": "The details of who owes how much and for what" (optional),
             "currency_code": "SGD" (optional, default: "SGD"),
             "category_id": 25 (optional, default: 25),
@@ -150,7 +150,7 @@ def add_expense(request_json: str) -> str:
         }
     
     Returns:
-        str: Success message with expense ID, or error message if request fails
+        str: Success message with expense ID and expense title, or error message if request fails
     """
     try:
         # Validate and parse the request
@@ -259,7 +259,7 @@ def update_expense(expense_id: str, request_json: str) -> str:
         request_json: A JSON string representing the AddExpenseRequest. Format:
         {
             "cost": "26",
-            "description": "The name of the restaurant or the item being split",
+            "description": "The name of the restaurant or the item being split. This will be used as the expense title in Splitwise.",
             "details": "The details of who owes how much and for what" (optional),
             "currency_code": "SGD" (optional, default: "SGD"),
             "category_id": 25 (optional, default: 25),
@@ -274,7 +274,7 @@ def update_expense(expense_id: str, request_json: str) -> str:
         }
     
     Returns:
-        str: Success message with expense ID, or error message if request fails
+        str: Success message with expense ID and expense title, or error message if request fails
     """
     try:
         # Validate and parse the request
