@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from telegram import Update, ForceReply
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from ocr import process_image_with_mistral_ocr, set_logger
-from ai import process_message
+from ai import process_message, SplitBotRequest
 
 # Load environment variables
 load_dotenv()
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 set_logger(logger)
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle incoming images and file attachments, performing OCR."""
+    """Handle incoming images and file attachments, performing OCR and processing with AI."""
     if not update.message:
         return
     
@@ -41,6 +41,13 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         file_id = document.file_id
     else:
         return
+    
+    # Get group/chat ID (works for both groups and private chats)
+    group_id = str(update.message.chat.id)
+    
+    # Extract sender information
+    from_user = update.message.from_user
+    sender = from_user.username
     
     # Send a "processing" message
     processing_msg = await update.message.reply_text("Processing image with OCR...")
@@ -60,12 +67,27 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Process the image with OCR using the URL
         extracted_text = await process_image_with_mistral_ocr(image_url)
         
-        # Delete the processing message and send the result
-        await processing_msg.delete()
+        # Update processing message
+        await processing_msg.edit_text("Processing with AI...")
         
         if extracted_text:
-            await update.message.reply_text(extracted_text)
+            # Create SplitBotRequest object with OCR text
+            request = SplitBotRequest(
+                message="",  # Empty message for image-only requests
+                group_id=group_id,
+                sender=sender,
+                ocr_image_text=extracted_text
+            )
+            
+            # Process the OCR text with AI
+            ai_response = process_message(request)
+            
+            # Delete the processing message and send the AI response
+            await processing_msg.delete()
+            await update.message.reply_text(ai_response)
         else:
+            # No text extracted, just inform the user
+            await processing_msg.delete()
             await update.message.reply_text("Sorry, I couldn't extract any text from the image.")
             
     except Exception as e:
@@ -73,7 +95,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await processing_msg.delete()
         await update.message.reply_text(f"Error processing image: {str(e)}")
 
-async def handle_by_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages by processing them with AI."""
     if not update.message or not update.message.text:
         return
@@ -81,15 +103,24 @@ async def handle_by_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Get group/chat ID (works for both groups and private chats)
     group_id = str(update.message.chat.id)
     
+    # Extract sender information
+    from_user = update.message.from_user
+    sender = from_user.username
+    
     # Send a "processing" message
     processing_msg = await update.message.reply_text("Processing with AI...")
     
     try:
-        # Process the message with AI (including conversation history)
-        ai_response = process_message(
+        # Create SplitBotRequest object
+        request = SplitBotRequest(
             message=update.message.text,
             group_id=group_id,
+            sender=sender,
+            ocr_image_text=""  # Empty for text messages, OCR is handled separately
         )
+        
+        # Process the message with AI (including conversation history)
+        ai_response = process_message(request)
         
         # Delete the processing message and send the AI response
         await processing_msg.delete()
@@ -100,14 +131,14 @@ async def handle_by_ai(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await processing_msg.delete()
         await update.message.reply_text(f"Error processing message: {str(e)}")
 
-def main() -> None:
-    """Start the bot."""
+def setup_application() -> Application:
+    """Setup the Telegram bot application with handlers."""
     # Create the Application and pass it your bot's token.
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.error("No TELEGRAM_BOT_TOKEN found in environment variables.")
         print("Error: TELEGRAM_BOT_TOKEN not found. Please set it in .env file.")
-        return
+        raise ValueError("TELEGRAM_BOT_TOKEN not found in environment variables")
 
     application = Application.builder().token(token).build()
 
@@ -115,40 +146,56 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     
     # Handle text messages - process with AI
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_by_ai))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Run the bot based on environment
-    if IS_PROD:
-        # Production mode: use webhook
-        webhook_url = os.getenv("BOT_WEBHOOK")
-        port = os.getenv("PORT")
+    return application
+
+def setup_prod_webhook(application: Application) -> None:
+    """Setup and run the bot in production mode with webhook."""
+    webhook_url = os.getenv("BOT_WEBHOOK")
+    port = os.getenv("PORT")
+    
+    if not webhook_url:
+        logger.error("BOT_WEBHOOK not found in environment variables for production mode.")
+        raise ValueError("BOT_WEBHOOK not found in environment variables for production mode")
+    
+    if not port:
+        logger.error("PORT not found in environment variables for production mode.")
+        raise ValueError("PORT not found in environment variables for production mode")
+    
+    try:
+        port = int(port)
+    except ValueError:
+        logger.error(f"Invalid PORT value: {port}. Must be an integer.")
+        raise ValueError(f"Invalid PORT value: {port}. Must be an integer")
+    
+    logger.info(f"Starting bot in production mode with webhook: {webhook_url} on port {port}")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=port,
+        url_path="/webhook",
+        webhook_url=webhook_url,
+        allowed_updates=Update.ALL_TYPES
+    )
+
+def setup_non_prod_polling(application: Application) -> None:
+    """Setup and run the bot in non-production mode with polling."""
+    logger.info("Starting bot in development mode with polling")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+def main() -> None:
+    """Start the bot."""
+    try:
+        application = setup_application()
         
-        if not webhook_url:
-            logger.error("BOT_WEBHOOK not found in environment variables for production mode.")
-            return
-        
-        if not port:
-            logger.error("PORT not found in environment variables for production mode.")
-            return
-        
-        try:
-            port = int(port)
-        except ValueError:
-            logger.error(f"Invalid PORT value: {port}. Must be an integer.")
-            return
-        
-        logger.info(f"Starting bot in production mode with webhook: {webhook_url} on port {port}")
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=port,
-            url_path="/webhook",
-            webhook_url=webhook_url,
-            allowed_updates=Update.ALL_TYPES
-        )
-    else:
-        # Development mode: use polling
-        logger.info("Starting bot in development mode with polling")
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Run the bot based on environment
+        if IS_PROD:
+            setup_prod_webhook(application)
+        else:
+            setup_non_prod_polling(application)
+    except ValueError as e:
+        logger.error(f"Configuration error: {str(e)}")
+        return
 
 if __name__ == "__main__":
     main()
