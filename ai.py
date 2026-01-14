@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Any
+from typing import Any, Optional
 from langchain.agents import create_agent, AgentState
 from langchain.agents.middleware import before_model
 from langchain_core.tools import tool
@@ -10,8 +10,12 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.runtime import Runtime
 from splitwise.tools import add_expense, update_expense, delete_expense
+from ocr import process_image_with_mistral_ocr, set_logger
 
 logger = logging.getLogger(__name__)
+
+# Set logger for OCR module
+set_logger(logger)
 
 # System prompt for the AI
 SYSTEM_PROMPT = '''You are Split. A helpful bot who's purpose is to help users split their dinner bills. You are part of a group chat where users will interact with you. Follow the steps below to help them split the bill
@@ -47,30 +51,44 @@ Make sure your answers are succinct, don't be too verbose
 MAX_HISTORY_MESSAGES = 20
 
 class SplitBotRequest:
-    def __init__(self, message: str, group_id: str, sender: str, ocr_image_text: str):
+    def __init__(self, message: str, group_id: str, sender: str, image_url: Optional[str] = None):
         self.message = message
         self.group_id = group_id
         self.sender = sender
-        self.ocr_image_text = ocr_image_text
-    def to_user_message(self) -> str:
+        self.image_url = image_url
+    
+    async def to_user_message(self) -> str:
         message = f"(Sender ID:{self.sender}): {self.message}"
-        if self.ocr_image_text:
-            message += f"\n\nOCR Image Text: {self.ocr_image_text}"
+        
+        # Process OCR if image_url is provided
+        if self.image_url:
+            logger.info(f"Processing OCR for image URL: {self.image_url}")
+            ocr_text = await process_image_with_mistral_ocr(self.image_url)
+            if not ocr_text or ocr_text.startswith("Error:"):
+                # Raise exception if OCR failed - will be caught in process_message
+                raise ValueError(ocr_text if ocr_text else "Sorry, I couldn't extract any text from the image.")
+            message += f"\n\nOCR Image Text: {ocr_text}"
+        
         return message
 
-def process_message(request: SplitBotRequest) -> str:
+async def process_message(request: SplitBotRequest) -> str:
     """
     Process a message using Grok 4 Fast via OpenRouter with conversation memory stored in PostgreSQL.
     Uses LangChain agents with a calculator tool and checkpoint-based memory.
     
     Args:
-        message: The input message string to process
-        group_id: Unique identifier for the group/chat as a string (used as thread_id for conversation memory)
-        max_messages: Maximum number of messages to keep in context (default: 20)
+        request: SplitBotRequest object containing message, group_id, sender, and optionally image_url
         
     Returns:
         The AI's response as a string
     """
+    # Get user message (OCR processing happens inside to_user_message)
+    try:
+        user_message = await request.to_user_message()
+    except ValueError as e:
+        # Return error message if OCR failed
+        return str(e)
+    
     # Get environment variables
     base_url = os.getenv("AI_BASE_URL")
     api_token = os.getenv("AI_TOKEN")
@@ -114,7 +132,7 @@ def process_message(request: SplitBotRequest) -> str:
             # Invoke agent with message and thread_id (group_id)
             # The checkpointer automatically handles message history persistence
             result = agent.invoke(
-                {"messages": [{"role": "user", "content": request.to_user_message()}]},
+                {"messages": [{"role": "user", "content": user_message}]},
                 {
                     "configurable": {
                         "thread_id": request.group_id,

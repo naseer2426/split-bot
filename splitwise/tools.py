@@ -406,14 +406,11 @@ def delete_expense(expense_id: str) -> str:
                 return error_messages[0]
             return "Error: Unknown error occurred while deleting expense"
         
-        # Extract expense ID and description from successful response
-        if result.get("expenses") and len(result["expenses"]) > 0:
-            expense = result["expenses"][0]
-            expense_id = expense.get("id")
-            expense_description = expense.get("description", "Unknown")
-            return f"Successfully deleted expense '{expense_description}' with expense ID: {expense_id}"
+        # Check for success response
+        if result.get("success") is True:
+            return f"Successfully deleted expense with ID: {expense_id}"
         else:
-            return "Error: Expense was deleted but no expense ID was returned"
+            return "Error: Expense deletion failed - success flag not returned"
             
     except httpx.HTTPStatusError as e:
         return f"Error: HTTP {e.response.status_code} - {e.response.text}"

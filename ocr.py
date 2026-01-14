@@ -1,7 +1,6 @@
 import os
 import httpx
 from typing import Optional
-import uuid
 
 logger = None
 

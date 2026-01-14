@@ -1,9 +1,8 @@
 import os
 import logging
 from dotenv import load_dotenv
-from telegram import Update, ForceReply
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from ocr import process_image_with_mistral_ocr, set_logger
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from ai import process_message, SplitBotRequest
 
 # Load environment variables
@@ -20,9 +19,6 @@ logging.basicConfig(
     level=logging.DEBUG if IS_DEV else logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Set logger for OCR module
-set_logger(logger)
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming images and file attachments, performing OCR and processing with AI."""
@@ -50,7 +46,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     sender = from_user.username
     
     # Send a "processing" message
-    processing_msg = await update.message.reply_text("Processing image with OCR...")
+    processing_msg = await update.message.reply_text("Processing with AI...")
     
     try:
         # Get the file object to retrieve the image URL
@@ -64,31 +60,20 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # file.file_path already contains the full URL, use it directly
         image_url = file.file_path
         
-        # Process the image with OCR using the URL
-        extracted_text = await process_image_with_mistral_ocr(image_url)
+        # Create SplitBotRequest object with image URL
+        request = SplitBotRequest(
+            message="",  # Empty message for image-only requests
+            group_id=group_id,
+            sender=sender,
+            image_url=image_url
+        )
         
-        # Update processing message
-        await processing_msg.edit_text("Processing with AI...")
+        # Process the image with AI (OCR is handled internally)
+        ai_response = await process_message(request)
         
-        if extracted_text:
-            # Create SplitBotRequest object with OCR text
-            request = SplitBotRequest(
-                message="",  # Empty message for image-only requests
-                group_id=group_id,
-                sender=sender,
-                ocr_image_text=extracted_text
-            )
-            
-            # Process the OCR text with AI
-            ai_response = process_message(request)
-            
-            # Delete the processing message and send the AI response
-            await processing_msg.delete()
-            await update.message.reply_text(ai_response)
-        else:
-            # No text extracted, just inform the user
-            await processing_msg.delete()
-            await update.message.reply_text("Sorry, I couldn't extract any text from the image.")
+        # Delete the processing message and send the AI response
+        await processing_msg.delete()
+        await update.message.reply_text(ai_response)
             
     except Exception as e:
         logger.error(f"Error processing image: {str(e)}")
@@ -115,12 +100,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         request = SplitBotRequest(
             message=update.message.text,
             group_id=group_id,
-            sender=sender,
-            ocr_image_text=""  # Empty for text messages, OCR is handled separately
+            sender=sender
         )
         
         # Process the message with AI (including conversation history)
-        ai_response = process_message(request)
+        ai_response = await process_message(request)
         
         # Delete the processing message and send the AI response
         await processing_msg.delete()
