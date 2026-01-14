@@ -1,26 +1,12 @@
-import os
 import logging
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List 
 from dataclasses import dataclass
-from urllib.parse import urlparse
-from dotenv import load_dotenv
-import psycopg
 from psycopg.errors import UniqueViolation
-
-# Load environment variables
-load_dotenv()
+from db import get_connection
 
 # Setup logging
 logger = logging.getLogger(__name__)
-
-# Database connection
-db_connection_string = os.getenv("DB_CONNECTION_STRING")
-if not db_connection_string:
-    raise ValueError("DB_CONNECTION_STRING environment variable is required")
-
-# Global connection object
-_conn: Optional[psycopg.Connection] = None
 
 
 @dataclass
@@ -41,14 +27,6 @@ class User:
         return self.__str__()
 
 
-def _get_connection() -> psycopg.Connection:
-    """Get or create a database connection."""
-    global _conn
-    if _conn is None or _conn.closed:
-        _conn = psycopg.connect(db_connection_string)
-    return _conn
-
-
 def _row_to_user(row: tuple) -> User:
     """Convert a database row tuple to a User object."""
     return User(
@@ -60,6 +38,40 @@ def _row_to_user(row: tuple) -> User:
         created_at=row[5],
         updated_at=row[6]
     )
+
+
+def init_users_table():
+    """
+    Initialize the split_bot_users table if it doesn't exist.
+    Creates the table with the following schema:
+    - id: SERIAL PRIMARY KEY (auto increment, unique)
+    - name: VARCHAR(255) NOT NULL
+    - email: VARCHAR(255) NOT NULL
+    - telegram_username: VARCHAR(255) NULL
+    - whatsapp_number: VARCHAR(50) NULL
+    - created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    - updated_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS split_bot_users (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255) NOT NULL,
+                    telegram_username VARCHAR(255) NULL,
+                    whatsapp_number VARCHAR(50) NULL,
+                    created_at TIMESTAMP WITHOUT TIME ZONE NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITHOUT TIME ZONE NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.commit()
+            logger.info("Table split_bot_users initialized/verified")
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error initializing table: {str(e)}")
+        raise
 
 
 # CRUD Functions
@@ -89,7 +101,7 @@ def create_user(
     if not name or not email:
         raise ValueError("Name and email are required fields")
     
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -132,7 +144,7 @@ def get_user_by_id(user_id: int) -> Optional[User]:
     Returns:
         User: The user object if found, None otherwise
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -163,7 +175,7 @@ def get_user_by_email(email: str) -> Optional[User]:
     Returns:
         User: The user object if found, None otherwise
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -194,7 +206,7 @@ def get_user_by_telegram_username(telegram_username: str) -> Optional[User]:
     Returns:
         User: The user object if found, None otherwise
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -225,7 +237,7 @@ def get_user_by_whatsapp_number(whatsapp_number: str) -> Optional[User]:
     Returns:
         User: The user object if found, None otherwise
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -257,7 +269,7 @@ def get_all_users(limit: Optional[int] = None, offset: int = 0) -> List[User]:
     Returns:
         List[User]: List of user objects
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             query = """
@@ -303,7 +315,7 @@ def update_user(
     Raises:
         UniqueViolation: If email already exists for another user
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         # First check if user exists
         user = get_user_by_id(user_id)
@@ -390,7 +402,7 @@ def upsert_user_by_email(
         UniqueViolation: If there's a database integrity error
     """
     email = email.strip().lower()
-    conn = _get_connection()
+    conn = get_connection()
     
     try:
         # Try to get existing user
@@ -530,7 +542,7 @@ def delete_user(user_id: int) -> bool:
     Returns:
         bool: True if user was deleted, False if user was not found
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -570,7 +582,7 @@ def search_users(
     Returns:
         List[User]: List of matching user objects
     """
-    conn = _get_connection()
+    conn = get_connection()
     try:
         with conn.cursor() as cur:
             query = """
@@ -599,36 +611,3 @@ def search_users(
     except Exception as e:
         logger.error(f"Error searching users: {str(e)}")
         raise
-
-
-# Database connection management
-def connect_db():
-    """Connect to the database."""
-    try:
-        _get_connection()
-        logger.info("Connected to database")
-    except Exception as e:
-        logger.error(f"Error connecting to database: {str(e)}")
-        raise
-
-
-def close_db():
-    """Close the database connection."""
-    global _conn
-    try:
-        if _conn and not _conn.closed:
-            _conn.close()
-            _conn = None
-            logger.info("Closed database connection")
-    except Exception as e:
-        logger.error(f"Error closing database connection: {str(e)}")
-        raise
-
-
-# Initialize database connection on module import
-# Note: You may want to handle this differently based on your application's needs
-try:
-    connect_db()
-except Exception as e:
-    logger.warning(f"Could not connect to database on import: {str(e)}")
-    logger.warning("You may need to call connect_db() manually before using the models")
