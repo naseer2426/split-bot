@@ -9,7 +9,7 @@ from ai import process_message, SplitBotRequest
 from db import connect_db, close_db
 from dotenv import load_dotenv
 from chat_whitelist import init_chat_whitelist_table, search_whitelisted_chat
-from splitwise.users import init_users_table, get_all_users, create_user
+from splitwise.users import init_users_table, get_all_users, create_user, update_user, get_user_by_id
 from psycopg.errors import UniqueViolation
 
 # Load environment variables
@@ -92,6 +92,15 @@ class CreateUserRequest(BaseModel):
     """Request model for creating a user"""
     name: str = Field(..., description="User's name")
     email: str = Field(..., description="User's email")
+    telegram_username: Optional[str] = Field(None, description="User's Telegram username")
+    whatsapp_number: Optional[str] = Field(None, description="User's WhatsApp number")
+    whatsapp_lid: Optional[str] = Field(None, description="User's WhatsApp LID")
+
+
+class UpdateUserRequest(BaseModel):
+    """Request model for updating a user"""
+    name: Optional[str] = Field(None, description="User's name")
+    email: Optional[str] = Field(None, description="User's email")
     telegram_username: Optional[str] = Field(None, description="User's Telegram username")
     whatsapp_number: Optional[str] = Field(None, description="User's WhatsApp number")
     whatsapp_lid: Optional[str] = Field(None, description="User's WhatsApp LID")
@@ -233,6 +242,53 @@ async def create_user_endpoint(request: CreateUserRequest) -> UserResponse:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Unexpected error creating user: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.put("/users/{user_id}", response_model=UserResponse)
+async def update_user_endpoint(user_id: int, request: UpdateUserRequest) -> UserResponse:
+    """
+    Update an existing user in the splitwise database.
+    
+    All fields are optional. Only provided fields will be updated.
+    Returns the updated user object.
+    """
+    try:
+        # Check if user exists
+        existing_user = get_user_by_id(user_id)
+        if not existing_user:
+            raise HTTPException(status_code=404, detail=f"User with id {user_id} not found")
+        
+        # Update the user
+        updated_user = update_user(
+            user_id=user_id,
+            name=request.name,
+            email=request.email,
+            telegram_username=request.telegram_username,
+            whatsapp_number=request.whatsapp_number,
+            whatsapp_lid=request.whatsapp_lid
+        )
+        
+        if not updated_user:
+            raise HTTPException(status_code=404, detail=f"User with id {user_id} not found")
+        
+        return UserResponse(
+            id=updated_user.id,
+            name=updated_user.name,
+            email=updated_user.email,
+            telegram_username=updated_user.telegram_username,
+            whatsapp_number=updated_user.whatsapp_number,
+            whatsapp_lid=updated_user.whatsapp_lid,
+            created_at=updated_user.created_at,
+            updated_at=updated_user.updated_at
+        )
+    except HTTPException:
+        raise
+    except UniqueViolation as e:
+        logger.error(f"User with email {request.email} already exists: {str(e)}")
+        raise HTTPException(status_code=409, detail=f"User with email {request.email} already exists")
+    except Exception as e:
+        logger.error(f"Unexpected error updating user: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
