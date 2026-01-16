@@ -10,7 +10,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.runtime import Runtime
 from splitwise.tools import add_expense, update_expense, delete_expense
-from ocr import process_image_with_mistral_ocr, set_logger
+from ocr import ocr_image_url, ocr_image_base64, set_logger
 
 logger = logging.getLogger(__name__)
 
@@ -51,19 +51,28 @@ Make sure your answers are succinct, don't be too verbose
 MAX_HISTORY_MESSAGES = 20
 
 class SplitBotRequest:
-    def __init__(self, message: str, group_id: str, sender: str, image_url: Optional[str] = None):
+    def __init__(self, message: str, group_id: str, sender: str, image_url: Optional[str] = None, image_base64: Optional[Any] = None):
         self.message = message
         self.group_id = group_id
         self.sender = sender
         self.image_url = image_url
+        self.image_base64 = image_base64
     
     async def to_user_message(self) -> str:
         message = f"(Sender ID:{self.sender}): {self.message}"
         
+        # Process OCR if image_base64 is provided (priority over image_url)
+        if self.image_base64:
+            logger.info(f"Processing OCR for base64 image")
+            ocr_text = await ocr_image_base64(self.image_base64.data, self.image_base64.mtype)
+            if not ocr_text or ocr_text.startswith("Error:"):
+                # Raise exception if OCR failed - will be caught in process_message
+                raise ValueError(ocr_text if ocr_text else "Sorry, I couldn't extract any text from the image.")
+            message += f"\n\nOCR Image Text: {ocr_text}"
         # Process OCR if image_url is provided
-        if self.image_url:
+        elif self.image_url:
             logger.info(f"Processing OCR for image URL: {self.image_url}")
-            ocr_text = await process_image_with_mistral_ocr(self.image_url)
+            ocr_text = await ocr_image_url(self.image_url)
             if not ocr_text or ocr_text.startswith("Error:"):
                 # Raise exception if OCR failed - will be caught in process_message
                 raise ValueError(ocr_text if ocr_text else "Sorry, I couldn't extract any text from the image.")

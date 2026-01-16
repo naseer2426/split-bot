@@ -58,6 +58,12 @@ app = FastAPI(
 )
 
 
+class ImageBase64(BaseModel):
+    """Model for base64-encoded image data"""
+    data: str = Field(..., description="Base64-encoded image data")
+    mtype: str = Field(..., description="MIME type of the image (e.g., 'image/png', 'image/jpeg')")
+
+
 class ProcessMessageRequest(BaseModel):
     """Pydantic model for request validation matching SplitBotRequest"""
     message: str = Field(..., description="The message content")
@@ -65,6 +71,7 @@ class ProcessMessageRequest(BaseModel):
     sender: str = Field(..., description="The sender ID")
     platform_type: str = Field(..., description="Platform type (WHATSAPP or TELEGRAM)")
     image_url: Optional[str] = Field(None, description="Optional URL to an image for OCR processing")
+    image_base64: Optional[ImageBase64] = Field(None, description="Optional base64-encoded image for OCR processing")
 
 
 class ProcessMessageResponse(BaseModel):
@@ -152,7 +159,8 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
             message=request.message,
             group_id=request.group_id,
             sender=request.sender,
-            image_url=request.image_url
+            image_url=request.image_url,
+            image_base64=request.image_base64
         )
         
         # Process the message

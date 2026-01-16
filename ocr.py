@@ -9,18 +9,18 @@ def set_logger(logger_instance):
     global logger
     logger = logger_instance
 
-async def process_image_with_mistral_ocr(image_url: str) -> Optional[str]:
+async def _ocr_image_internal(image_data_uri: str) -> Optional[str]:
     """
-    Process an image using Mistral OCR API and return the extracted text.
+    Internal function to process an image using Mistral OCR API.
     
     Args:
-        image_url: The URL of the image to process.
+        image_data_uri: The data URI or URL of the image to process (can be a regular URL or data URI).
         
     Returns:
-        The extracted text (markdown) from the image, or None if there was an error.
+        The extracted text (markdown) from the image, or an error message string if there was an error.
     """
     if logger:
-        logger.info(f"Processing image URL with Mistral OCR: {image_url}")
+        logger.info(f"Processing image with Mistral OCR: {image_data_uri[:100]}...")
     
     # Retrieve the Mistral API key from environment variables
     api_key = os.getenv('MISTRAL_API_KEY')
@@ -35,7 +35,7 @@ async def process_image_with_mistral_ocr(image_url: str) -> Optional[str]:
         "model": "mistral-ocr-latest",
         "document": {
             "type": "image_url",
-            "image_url": image_url
+            "image_url": image_data_uri
         },
         "include_image_base64": False
     }
@@ -104,3 +104,34 @@ async def process_image_with_mistral_ocr(image_url: str) -> Optional[str]:
             logger.error(error_msg)
         return f"Error: {error_msg}"
 
+async def ocr_image_url(image_url: str) -> Optional[str]:
+    """
+    Process an image using Mistral OCR API and return the extracted text.
+    
+    Args:
+        image_url: The URL of the image to process.
+        
+    Returns:
+        The extracted text (markdown) from the image, or None if there was an error.
+    """
+    if logger:
+        logger.info(f"Processing image URL with Mistral OCR: {image_url}")
+    return await _ocr_image_internal(image_url)
+
+async def ocr_image_base64(image_base_64: str, image_mtype: str) -> Optional[str]:
+    """
+    Process a base64-encoded image using Mistral OCR API and return the extracted text.
+    
+    Args:
+        image_base_64: The base64-encoded image data.
+        image_mtype: The MIME type of the image (e.g., 'image/png', 'image/jpeg').
+        
+    Returns:
+        The extracted text (markdown) from the image, or None if there was an error.
+    """
+    if logger:
+        logger.info(f"Processing base64 image with Mistral OCR (mtype: {image_mtype})")
+    
+    # Construct the data URI
+    image_data_uri = f"data:{image_mtype};base64,{image_base_64}"
+    return await _ocr_image_internal(image_data_uri)
