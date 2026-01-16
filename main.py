@@ -72,6 +72,7 @@ class ProcessMessageRequest(BaseModel):
     platform_type: str = Field(..., description="Platform type (WHATSAPP or TELEGRAM)")
     image_url: Optional[str] = Field(None, description="Optional URL to an image for OCR processing")
     image_base64: Optional[ImageBase64] = Field(None, description="Optional base64-encoded image for OCR processing")
+    bot_name: Optional[str] = Field("me", description="The bot name to use in the system prompt")
 
 
 class ProcessMessageResponse(BaseModel):
@@ -160,7 +161,8 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
             group_id=request.group_id,
             sender=request.sender,
             image_url=request.image_url,
-            image_base64=request.image_base64
+            image_base64=request.image_base64,
+            bot_name=request.bot_name or "me"
         )
         
         # Process the message

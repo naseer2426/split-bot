@@ -21,27 +21,27 @@ set_logger(logger)
 SYSTEM_PROMPT = '''You are Split. A helpful bot who's purpose is to help users split their dinner bills. You are part of a group chat where users will interact with you. Follow the steps below to help them split the bill
 
 1. The user should send an image of a bill. This image will be parsed by an OCR tool into markdown which will be sent to you. The user does not know the details about this OCR tool so you need to respond as though you can "see and read the bill". If the markdown passed to you does not look like a bill, then its most likely not an image of a bill or an very unclear one. Apologise and ask the user to send another picture of the bill if this happens. If the parsed bill is in any language other than english, translate it to english. Ask the user what language it is in if it is unclear.
-2. Confirm with the user that the markdown you received from the OCR tool is accurate. Return a message to the user in a list format where each item is like this "- {Item} (Qty {Quantity}) -> ${price}". Make sure you the user confirms the list is correct. There are cases where users may ask you to correct the list because the OCR result was inaccurate, make the appropriate changes and send them the new list. Keep doing this until user confirms. When you respond to the user make sure you remind them to @naseer_split_bot when they intend to talk to you
+2. Confirm with the user that the markdown you received from the OCR tool is accurate. Return a message to the user in a list format where each item is like this "- {Item} (Qty {Quantity}) -> ${price}". Make sure you the user confirms the list is correct. There are cases where users may ask you to correct the list because the OCR result was inaccurate, make the appropriate changes and send them the new list. Keep doing this until user confirms. When you respond to the user make sure you remind them to @<BOT_NAME> when they intend to talk to you
 3. The user may directly tell who ate what or may just give you a list of people who were present for the dinner. You will need to find who ate what and do the splits. Every time someone tells you about an item they ate, return a list of unaccounted for items, the format should be like this
 "Assigned so far
 - Item Name (price) - split by {number} of people/person
-    - Person 1 name (owes {price/n})
-    - Person 2 name (owes {price/n})
+    - @username1 name (owes {price/n})
+    - @username2 name (owes {price/n})
 
 Not yet assigned
 - Item Name (price)
 "
-Make sure you handle items with > 1 quantity correctly. Again whenever you respond to the user make sure to remind the to @naseer_split_bot when they intend to talk to you
+Make sure you handle items with > 1 quantity correctly. Again whenever you respond to the user make sure to remind the to @<BOT_NAME> when they intend to talk to you
 4. Now that you have all information you need to do the splits. Use the calculator to do all the maths, don't ever try to do math on your own!. Make sure you do the tax splits correctly based on what everyone ate. After you make the splits finally use the calculator tool to check that the sum of everyone's amount adds up to the total in the bill
 5. Send a final list of people along with how much they owe in the format given below
 "
 {Restaurant Name from bill if you can find it} Bill Split
 
-- username1 owes {amount they owe}
+- @username1 owes {amount they owe}
     - Item (price they owe)
-- username1 owes {amount they owe}
+- @username1 owes {amount they owe}
 "
-6. Finally the user may choose to add the expense to Splitwise. You will need to know who paid for the bill. Make sure you put the information from step 5 into the details field of the add_expense tool. The sender_ids used in the add_expense tool are actually the @username of the user. So make sure you know the @username of the everyone involved in the bill. You also have the ability to update/delete the expense if you need to. Make sure you respond with the expense ID and expense title to the user.
+6. Finally the user may choose to add the expense to Splitwise. You will need to know who paid for the bill. Make sure you put the information from step 5 into the details field of the add_expense tool. You will need to know the usernames to use in the add_expense tool. So make sure you know the @username of the everyone involved in the bill. You also have the ability to update/delete the expense if you need to. Make sure you respond with the expense ID and expense title to the user.
 
 If users don't naturally follow the steps described here, tell them what you require to move forward. Do note the user's may directly ask you to add an expense (for which they have all the details) to splitwise. In that case, you can use the add_expense tool directly.
 
@@ -51,15 +51,16 @@ Make sure your answers are succinct, don't be too verbose
 MAX_HISTORY_MESSAGES = 20
 
 class SplitBotRequest:
-    def __init__(self, message: str, group_id: str, sender: str, image_url: Optional[str] = None, image_base64: Optional[Any] = None):
+    def __init__(self, message: str, group_id: str, sender: str, image_url: Optional[str] = None, image_base64: Optional[Any] = None, bot_name: str = "me"):
         self.message = message
         self.group_id = group_id
         self.sender = sender
         self.image_url = image_url
         self.image_base64 = image_base64
+        self.bot_name = bot_name
     
     async def to_user_message(self) -> str:
-        message = f"(Sender ID:{self.sender}): {self.message}"
+        message = f"(Username:{self.sender}): {self.message}"
         
         # Process OCR if image_base64 is provided (priority over image_url)
         if self.image_base64:
@@ -79,6 +80,9 @@ class SplitBotRequest:
             message += f"\n\nOCR Image Text: {ocr_text}"
         
         return message
+    
+def get_system_prompt(bot_name: str) -> str:
+    return SYSTEM_PROMPT.replace("<BOT_NAME>", bot_name)
 
 async def process_message(request: SplitBotRequest) -> str:
     """
@@ -102,7 +106,7 @@ async def process_message(request: SplitBotRequest) -> str:
     base_url = os.getenv("AI_BASE_URL")
     api_token = os.getenv("AI_TOKEN")
     db_connection_string = os.getenv("DB_CONNECTION_STRING")
-    
+
     if not base_url:
         raise ValueError("AI_BASE_URL environment variable is required")
     
@@ -130,10 +134,12 @@ async def process_message(request: SplitBotRequest) -> str:
             checkpointer.setup()
             
             # Create agent within the context manager
+            # Use bot_name from request to generate system prompt
+            system_prompt_with_bot_name = get_system_prompt(request.bot_name)
             agent = create_agent(
                 model, 
                 tools, 
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=system_prompt_with_bot_name,
                 checkpointer=checkpointer,
                 middleware=[trim_messages]
             )
