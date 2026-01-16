@@ -1,14 +1,16 @@
 import logging
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
+from datetime import datetime
 from contextlib import asynccontextmanager
 from ai import process_message, SplitBotRequest
 from db import connect_db, close_db
 from dotenv import load_dotenv
 from chat_whitelist import init_chat_whitelist_table, search_whitelisted_chat
-from splitwise.users import init_users_table
+from splitwise.users import init_users_table, get_all_users, create_user
+from psycopg.errors import UniqueViolation
 
 # Load environment variables
 load_dotenv()
@@ -69,6 +71,30 @@ class ProcessMessageResponse(BaseModel):
     """Response model for the process_message endpoint"""
     response: Optional[str] = Field(None, description="The AI response message")
     error: Optional[str] = Field(None, description="Error message if any")
+
+
+class UserResponse(BaseModel):
+    """Response model for user data"""
+    id: int = Field(..., description="User ID")
+    name: str = Field(..., description="User's name")
+    email: str = Field(..., description="User's email")
+    telegram_username: Optional[str] = Field(None, description="User's Telegram username")
+    whatsapp_number: Optional[str] = Field(None, description="User's WhatsApp number")
+    whatsapp_lid: Optional[str] = Field(None, description="User's WhatsApp LID")
+    created_at: datetime = Field(..., description="User creation timestamp")
+    updated_at: datetime = Field(..., description="User last update timestamp")
+    
+    class Config:
+        from_attributes = True
+
+
+class CreateUserRequest(BaseModel):
+    """Request model for creating a user"""
+    name: str = Field(..., description="User's name")
+    email: str = Field(..., description="User's email")
+    telegram_username: Optional[str] = Field(None, description="User's Telegram username")
+    whatsapp_number: Optional[str] = Field(None, description="User's WhatsApp number")
+    whatsapp_lid: Optional[str] = Field(None, description="User's WhatsApp LID")
 
 
 def check_group_whitelisted(group_id: str, platform_type: str) -> bool:
@@ -143,6 +169,71 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
             response=None,
             error=f"Internal server error: {str(e)}"
         )
+
+
+@app.get("/users", response_model=List[UserResponse])
+async def get_users(
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of users to return"),
+    offset: int = Query(0, ge=0, description="Number of users to skip")
+) -> List[UserResponse]:
+    """
+    Get all users from the splitwise database.
+    
+    Supports pagination via limit and offset query parameters.
+    Returns a list of all users if no limit is specified.
+    """
+    try:
+        users = get_all_users(limit=limit, offset=offset)
+        return [UserResponse(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            telegram_username=user.telegram_username,
+            whatsapp_number=user.whatsapp_number,
+            whatsapp_lid=user.whatsapp_lid,
+            created_at=user.created_at,
+            updated_at=user.updated_at
+        ) for user in users]
+    except Exception as e:
+        logger.error(f"Error getting users: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/users", response_model=UserResponse, status_code=201)
+async def create_user_endpoint(request: CreateUserRequest) -> UserResponse:
+    """
+    Create a new user in the splitwise database.
+    
+    Requires name and email. Telegram username and WhatsApp number are optional.
+    Returns the created user object.
+    """
+    try:
+        user = create_user(
+            name=request.name,
+            email=request.email,
+            telegram_username=request.telegram_username,
+            whatsapp_number=request.whatsapp_number,
+            whatsapp_lid=request.whatsapp_lid
+        )
+        return UserResponse(
+            id=user.id,
+            name=user.name,
+            email=user.email,
+            telegram_username=user.telegram_username,
+            whatsapp_number=user.whatsapp_number,
+            whatsapp_lid=user.whatsapp_lid,
+            created_at=user.created_at,
+            updated_at=user.updated_at
+        )
+    except UniqueViolation as e:
+        logger.error(f"User with email {request.email} already exists: {str(e)}")
+        raise HTTPException(status_code=409, detail=f"User with email {request.email} already exists")
+    except ValueError as e:
+        logger.error(f"Validation error creating user: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error creating user: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 @app.get("/health")

@@ -17,6 +17,7 @@ class User:
     email: str
     telegram_username: Optional[str]
     whatsapp_number: Optional[str]
+    whatsapp_lid: Optional[str]
     created_at: datetime
     updated_at: datetime
     
@@ -35,8 +36,9 @@ def _row_to_user(row: tuple) -> User:
         email=row[2],
         telegram_username=row[3],
         whatsapp_number=row[4],
-        created_at=row[5],
-        updated_at=row[6]
+        whatsapp_lid=row[5],
+        created_at=row[6],
+        updated_at=row[7]
     )
 
 
@@ -49,12 +51,14 @@ def init_users_table():
     - email: VARCHAR(255) NOT NULL
     - telegram_username: VARCHAR(255) NULL
     - whatsapp_number: VARCHAR(50) NULL
+    - whatsapp_lid: VARCHAR(255) NULL
     - created_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     - updated_at: TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     """
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            # Create table if it doesn't exist
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS split_bot_users (
                     id SERIAL PRIMARY KEY,
@@ -62,10 +66,25 @@ def init_users_table():
                     email VARCHAR(255) NOT NULL,
                     telegram_username VARCHAR(255) NULL,
                     whatsapp_number VARCHAR(50) NULL,
+                    whatsapp_lid VARCHAR(255) NULL,
                     created_at TIMESTAMP WITHOUT TIME ZONE NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITHOUT TIME ZONE NULL DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # Add whatsapp_lid column if it doesn't exist (for existing tables)
+            cur.execute("""
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name='split_bot_users' AND column_name='whatsapp_lid'
+                    ) THEN
+                        ALTER TABLE split_bot_users ADD COLUMN whatsapp_lid VARCHAR(255) NULL;
+                    END IF;
+                END $$;
+            """)
+            
             conn.commit()
             logger.info("Table split_bot_users initialized/verified")
     except Exception as e:
@@ -80,7 +99,8 @@ def create_user(
     name: str,
     email: str,
     telegram_username: Optional[str] = None,
-    whatsapp_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None,
+    whatsapp_lid: Optional[str] = None
 ) -> User:
     """
     Create a new user.
@@ -90,6 +110,7 @@ def create_user(
         email: User's email (required, must be unique)
         telegram_username: User's Telegram username (optional)
         whatsapp_number: User's WhatsApp number (optional)
+        whatsapp_lid: User's WhatsApp LID (optional)
     
     Returns:
         User: The created user object
@@ -106,15 +127,16 @@ def create_user(
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO split_bot_users (name, email, telegram_username, whatsapp_number, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                INSERT INTO split_bot_users (name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 """,
                 (
                     name.strip(),
                     email.strip().lower(),
                     telegram_username.strip() if telegram_username else None,
                     whatsapp_number.strip() if whatsapp_number else None,
+                    whatsapp_lid.strip() if whatsapp_lid else None,
                     datetime.now(),
                     datetime.now()
                 )
@@ -149,7 +171,7 @@ def get_user_by_id(user_id: int) -> Optional[User]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                SELECT id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 FROM split_bot_users
                 WHERE id = %s
                 """,
@@ -180,7 +202,7 @@ def get_user_by_email(email: str) -> Optional[User]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                SELECT id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 FROM split_bot_users
                 WHERE email = %s
                 """,
@@ -211,7 +233,7 @@ def get_user_by_telegram_username(telegram_username: str) -> Optional[User]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                SELECT id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 FROM split_bot_users
                 WHERE telegram_username = %s
                 """,
@@ -242,7 +264,7 @@ def get_user_by_whatsapp_number(whatsapp_number: str) -> Optional[User]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                SELECT id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 FROM split_bot_users
                 WHERE whatsapp_number = %s
                 """,
@@ -255,6 +277,37 @@ def get_user_by_whatsapp_number(whatsapp_number: str) -> Optional[User]:
             return None
     except Exception as e:
         logger.error(f"Error getting user by whatsapp_number: {str(e)}")
+        raise
+
+
+def get_user_by_whatsapp_lid(whatsapp_lid: str) -> Optional[User]:
+    """
+    Get a user by their WhatsApp LID.
+    
+    Args:
+        whatsapp_lid: The user's WhatsApp LID
+    
+    Returns:
+        User: The user object if found, None otherwise
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
+                FROM split_bot_users
+                WHERE whatsapp_lid = %s
+                """,
+                (whatsapp_lid.strip(),)
+            )
+            row = cur.fetchone()
+            if row:
+                return _row_to_user(row)
+            logger.debug(f"User with whatsapp_lid {whatsapp_lid} not found")
+            return None
+    except Exception as e:
+        logger.error(f"Error getting user by whatsapp_lid: {str(e)}")
         raise
 
 
@@ -273,7 +326,7 @@ def get_all_users(limit: Optional[int] = None, offset: int = 0) -> List[User]:
     try:
         with conn.cursor() as cur:
             query = """
-                SELECT id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                SELECT id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 FROM split_bot_users
                 ORDER BY id
                 OFFSET %s
@@ -297,7 +350,8 @@ def update_user(
     name: Optional[str] = None,
     email: Optional[str] = None,
     telegram_username: Optional[str] = None,
-    whatsapp_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None,
+    whatsapp_lid: Optional[str] = None
 ) -> Optional[User]:
     """
     Update a user's information.
@@ -308,6 +362,7 @@ def update_user(
         email: New email (optional, must be unique)
         telegram_username: New Telegram username (optional, use empty string to clear)
         whatsapp_number: New WhatsApp number (optional, use empty string to clear)
+        whatsapp_lid: New WhatsApp LID (optional, use empty string to clear)
     
     Returns:
         User: The updated user object if found, None otherwise
@@ -339,6 +394,9 @@ def update_user(
         if whatsapp_number is not None:
             update_fields.append("whatsapp_number = %s")
             params.append(whatsapp_number.strip() if whatsapp_number else None)
+        if whatsapp_lid is not None:
+            update_fields.append("whatsapp_lid = %s")
+            params.append(whatsapp_lid.strip() if whatsapp_lid else None)
         
         if not update_fields:
             logger.warning("No fields to update")
@@ -356,7 +414,7 @@ def update_user(
                 UPDATE split_bot_users
                 SET {', '.join(update_fields)}
                 WHERE id = %s
-                RETURNING id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                RETURNING id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
             """
             cur.execute(query, params)
             row = cur.fetchone()
@@ -381,7 +439,8 @@ def upsert_user_by_email(
     email: str,
     name: Optional[str] = None,
     telegram_username: Optional[str] = None,
-    whatsapp_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None,
+    whatsapp_lid: Optional[str] = None
 ) -> User:
     """
     Upsert (update or insert) a user by their email address.
@@ -393,6 +452,7 @@ def upsert_user_by_email(
         name: User's name (required if creating new user, optional if updating)
         telegram_username: User's Telegram username (optional, use empty string to clear)
         whatsapp_number: User's WhatsApp number (optional, use empty string to clear)
+        whatsapp_lid: User's WhatsApp LID (optional, use empty string to clear)
     
     Returns:
         User: The upserted user object
@@ -417,6 +477,8 @@ def upsert_user_by_email(
                 update_fields["telegram_username"] = telegram_username.strip() if telegram_username else None
             if whatsapp_number is not None:
                 update_fields["whatsapp_number"] = whatsapp_number.strip() if whatsapp_number else None
+            if whatsapp_lid is not None:
+                update_fields["whatsapp_lid"] = whatsapp_lid.strip() if whatsapp_lid else None
             
             if not update_fields:
                 # No fields to update, just return existing user
@@ -438,7 +500,7 @@ def upsert_user_by_email(
                     UPDATE split_bot_users
                     SET {', '.join(update_clauses)}
                     WHERE id = %s
-                    RETURNING id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                    RETURNING id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 """
                 cur.execute(query, params)
                 row = cur.fetchone()
@@ -455,15 +517,16 @@ def upsert_user_by_email(
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        INSERT INTO split_bot_users (name, email, telegram_username, whatsapp_number, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        RETURNING id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                        INSERT INTO split_bot_users (name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                         """,
                         (
                             name.strip(),
                             email,
                             telegram_username.strip() if telegram_username else None,
                             whatsapp_number.strip() if whatsapp_number else None,
+                            whatsapp_lid.strip() if whatsapp_lid else None,
                             datetime.now(),
                             datetime.now()
                         )
@@ -490,6 +553,8 @@ def upsert_user_by_email(
                     update_fields["telegram_username"] = telegram_username.strip() if telegram_username else None
                 if whatsapp_number is not None:
                     update_fields["whatsapp_number"] = whatsapp_number.strip() if whatsapp_number else None
+                if whatsapp_lid is not None:
+                    update_fields["whatsapp_lid"] = whatsapp_lid.strip() if whatsapp_lid else None
                 
                 if not update_fields:
                     return user
@@ -509,7 +574,7 @@ def upsert_user_by_email(
                         UPDATE split_bot_users
                         SET {', '.join(update_clauses)}
                         WHERE id = %s
-                        RETURNING id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                        RETURNING id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                     """
                     cur.execute(query, params)
                     row = cur.fetchone()
@@ -567,7 +632,8 @@ def search_users(
     name: Optional[str] = None,
     email: Optional[str] = None,
     telegram_username: Optional[str] = None,
-    whatsapp_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None,
+    whatsapp_lid: Optional[str] = None
 ) -> List[User]:
     """
     Search for users by various criteria (exact matching).
@@ -578,6 +644,7 @@ def search_users(
         email: Exact email match (optional)
         telegram_username: Exact telegram username match (optional)
         whatsapp_number: Exact whatsapp number match (optional)
+        whatsapp_lid: Exact whatsapp LID match (optional)
     
     Returns:
         List[User]: List of matching user objects
@@ -586,7 +653,7 @@ def search_users(
     try:
         with conn.cursor() as cur:
             query = """
-                SELECT id, name, email, telegram_username, whatsapp_number, created_at, updated_at
+                SELECT id, name, email, telegram_username, whatsapp_number, whatsapp_lid, created_at, updated_at
                 FROM split_bot_users
                 WHERE 1=0
             """
@@ -604,6 +671,9 @@ def search_users(
             if whatsapp_number:
                 query += " OR whatsapp_number = %s"
                 params.append(whatsapp_number.strip())
+            if whatsapp_lid:
+                query += " OR whatsapp_lid = %s"
+                params.append(whatsapp_lid.strip())
             
             cur.execute(query, params)
             rows = cur.fetchall()
