@@ -141,7 +141,7 @@ def add_expense(request_json: str) -> str:
             "category_id": 25 (optional, default: 25),
             "users": [
                 {
-                    "sender_id": "sender_id",
+                    "sender_id": "sender id is the username part of the @username of the user. Make sure you don't pass the @ symbol in the sender_id",
                     "owed_share": 10.0,
                     "paid_share": 25.0
                 },
