@@ -334,7 +334,7 @@ def update_expense(expense_id: str, request_json: str) -> str:
             
             # Search for user by telegram_username OR whatsapp_number
             # search_users uses OR logic, so passing the same value to both will match either field
-            found_users = search_users(telegram_username=username, whatsapp_number=username)
+            found_users = search_users(telegram_username=username, whatsapp_lid=username)
             
             if found_users:
                 db_user = found_users[0]
