@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from typing import Any, Optional
 from langchain.agents import create_agent, AgentState
 from langchain.agents.middleware import before_model
@@ -11,6 +12,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.runtime import Runtime
 from splitwise.tools import add_expense, update_expense, delete_expense
 from ocr import ocr_image_url, ocr_image_base64, set_logger
+from metrics import ai_processing_duration_seconds, ai_processing_total, ai_processing_errors_total
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +53,11 @@ Make sure your answers are succinct, don't be too verbose
 MAX_HISTORY_MESSAGES = 20
 
 class SplitBotRequest:
-    def __init__(self, message: str, group_id: str, sender: str, image_url: Optional[str] = None, image_base64: Optional[Any] = None, bot_name: str = "me"):
+    def __init__(self, message: str, group_id: str, sender: str, platform_type: str, image_url: Optional[str] = None, image_base64: Optional[Any] = None, bot_name: str = "me"):
         self.message = message
         self.group_id = group_id
         self.sender = sender
+        self.platform_type = platform_type
         self.image_url = image_url
         self.image_base64 = image_base64
         self.bot_name = bot_name
@@ -90,16 +93,23 @@ async def process_message(request: SplitBotRequest) -> str:
     Uses LangChain agents with a calculator tool and checkpoint-based memory.
     
     Args:
-        request: SplitBotRequest object containing message, group_id, sender, and optionally image_url
+        request: SplitBotRequest object containing message, group_id, sender, platform_type, and optionally image_url
         
     Returns:
         The AI's response as a string
     """
+    platform_type = request.platform_type.strip().upper()
+    start_time = time.time()
+    
     # Get user message (OCR processing happens inside to_user_message)
     try:
         user_message = await request.to_user_message()
     except ValueError as e:
         # Return error message if OCR failed
+        duration = time.time() - start_time
+        ai_processing_duration_seconds.labels(platform_type=platform_type).observe(duration)
+        ai_processing_total.labels(platform_type=platform_type, status="failure").inc()
+        ai_processing_errors_total.labels(platform_type=platform_type, error_type="OCRError").inc()
         return str(e)
     
     # Get environment variables
@@ -108,14 +118,29 @@ async def process_message(request: SplitBotRequest) -> str:
     db_connection_string = os.getenv("DB_CONNECTION_STRING")
 
     if not base_url:
-        raise ValueError("AI_BASE_URL environment variable is required")
+        error = ValueError("AI_BASE_URL environment variable is required")
+        duration = time.time() - start_time
+        ai_processing_duration_seconds.labels(platform_type=platform_type).observe(duration)
+        ai_processing_total.labels(platform_type=platform_type, status="failure").inc()
+        ai_processing_errors_total.labels(platform_type=platform_type, error_type="ConfigurationError").inc()
+        raise error
     
     if not api_token:
-        raise ValueError("AI_TOKEN environment variable is required")
+        error = ValueError("AI_TOKEN environment variable is required")
+        duration = time.time() - start_time
+        ai_processing_duration_seconds.labels(platform_type=platform_type).observe(duration)
+        ai_processing_total.labels(platform_type=platform_type, status="failure").inc()
+        ai_processing_errors_total.labels(platform_type=platform_type, error_type="ConfigurationError").inc()
+        raise error
     
     if not db_connection_string:
         logger.error("DB_CONNECTION_STRING not found in environment variables")
-        raise ValueError("DB_CONNECTION_STRING environment variable is required")
+        error = ValueError("DB_CONNECTION_STRING environment variable is required")
+        duration = time.time() - start_time
+        ai_processing_duration_seconds.labels(platform_type=platform_type).observe(duration)
+        ai_processing_total.labels(platform_type=platform_type, status="failure").inc()
+        ai_processing_errors_total.labels(platform_type=platform_type, error_type="ConfigurationError").inc()
+        raise error
     
     try:
         # Initialize ChatOpenAI with OpenRouter configuration
@@ -158,9 +183,18 @@ async def process_message(request: SplitBotRequest) -> str:
             # Extract the AI response from the last message
             ai_response = result["messages"][-1].content
             
+            # Track successful processing
+            duration = time.time() - start_time
+            ai_processing_duration_seconds.labels(platform_type=platform_type).observe(duration)
+            ai_processing_total.labels(platform_type=platform_type, status="success").inc()
+            
             return ai_response
         
     except Exception as e:
+        duration = time.time() - start_time
+        ai_processing_duration_seconds.labels(platform_type=platform_type).observe(duration)
+        ai_processing_total.labels(platform_type=platform_type, status="failure").inc()
+        ai_processing_errors_total.labels(platform_type=platform_type, error_type=type(e).__name__).inc()
         logger.error(f"Error processing message with AI: {str(e)}")
         raise
 

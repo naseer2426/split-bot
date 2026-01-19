@@ -1,16 +1,19 @@
 import logging
 import os
+import time
 from fastapi import FastAPI, Query, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from contextlib import asynccontextmanager
+from prometheus_fastapi_instrumentator import Instrumentator
 from ai import process_message, SplitBotRequest
 from db import connect_db, close_db
 from dotenv import load_dotenv
 from chat_whitelist import init_chat_whitelist_table, search_whitelisted_chat
 from splitwise.users import init_users_table, get_all_users, create_user, update_user, get_user_by_id
 from psycopg.errors import UniqueViolation
+from metrics import messages_processed_total, users_created_total, db_query_duration_seconds, db_errors_total
 
 # Load environment variables
 load_dotenv()
@@ -56,6 +59,10 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Set up Prometheus instrumentation
+instrumentator = Instrumentator()
+instrumentator.instrument(app).expose(app)
 
 
 class ImageBase64(BaseModel):
@@ -145,21 +152,34 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
     Accepts a JSON body with message, group_id, sender, platform_type, and optional image_url.
     Returns the AI's response or an error message.
     """
+    platform_type = request.platform_type.strip().upper()
+    group_id = request.group_id.strip()
+    is_whitelisted = False
+    
     try:
         # Check if group is whitelisted
-        if not check_group_whitelisted(request.group_id, request.platform_type):
-            not_allowed_resp = f"This chat with ID: {request.group_id}, is not whitelisted, please ask Naseer to whitelist it"
-            logger.warning(f"Group {request.group_id} on platform {request.platform_type} is not whitelisted")
+        if not check_group_whitelisted(group_id, platform_type):
+            not_allowed_resp = f"This chat with ID: {group_id}, is not whitelisted, please ask Naseer to whitelist it"
+            logger.warning(f"Group {group_id} on platform {platform_type} is not whitelisted")
+            # Track non-whitelisted message
+            messages_processed_total.labels(
+                platform_type=platform_type,
+                whitelisted="false",
+                group_id=group_id
+            ).inc()
             return ProcessMessageResponse(
                 response=not_allowed_resp,
                 error=None
             )
         
+        is_whitelisted = True
+        
         # Convert Pydantic model to SplitBotRequest
         split_bot_request = SplitBotRequest(
             message=request.message,
-            group_id=request.group_id,
+            group_id=group_id,
             sender=request.sender,
+            platform_type=platform_type,
             image_url=request.image_url,
             image_base64=request.image_base64,
             bot_name=request.bot_name or "me"
@@ -167,6 +187,13 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
         
         # Process the message
         ai_response = await process_message(split_bot_request)
+        
+        # Track successful message processing
+        messages_processed_total.labels(
+            platform_type=platform_type,
+            whitelisted="true",
+            group_id=group_id
+        ).inc()
         
         return ProcessMessageResponse(
             response=ai_response,
@@ -176,6 +203,13 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
     except ValueError as e:
         # Handle validation errors (e.g., OCR failures)
         logger.error(f"ValueError in process_message: {str(e)}")
+        # Track failed message processing
+        if is_whitelisted:
+            messages_processed_total.labels(
+                platform_type=platform_type,
+                whitelisted="true",
+                group_id=group_id
+            ).inc()
         return ProcessMessageResponse(
             response=None,
             error=str(e)
@@ -184,6 +218,13 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
     except Exception as e:
         # Handle any other unexpected errors
         logger.error(f"Unexpected error in process_message: {str(e)}", exc_info=True)
+        # Track failed message processing
+        if is_whitelisted:
+            messages_processed_total.labels(
+                platform_type=platform_type,
+                whitelisted="true",
+                group_id=group_id
+            ).inc()
         return ProcessMessageResponse(
             response=None,
             error=f"Internal server error: {str(e)}"
@@ -201,8 +242,11 @@ async def get_users(
     Supports pagination via limit and offset query parameters.
     Returns a list of all users if no limit is specified.
     """
+    start_time = time.time()
     try:
         users = get_all_users(limit=limit, offset=offset)
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="get_users").observe(duration)
         return [UserResponse(
             id=user.id,
             name=user.name,
@@ -214,6 +258,9 @@ async def get_users(
             updated_at=user.updated_at
         ) for user in users]
     except Exception as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="get_users").observe(duration)
+        db_errors_total.labels(operation="get_users", error_type=type(e).__name__).inc()
         logger.error(f"Error getting users: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -226,6 +273,7 @@ async def create_user_endpoint(request: CreateUserRequest) -> UserResponse:
     Requires name and email. Telegram username and WhatsApp number are optional.
     Returns the created user object.
     """
+    start_time = time.time()
     try:
         user = create_user(
             name=request.name,
@@ -234,6 +282,9 @@ async def create_user_endpoint(request: CreateUserRequest) -> UserResponse:
             whatsapp_number=request.whatsapp_number,
             whatsapp_lid=request.whatsapp_lid
         )
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_user").observe(duration)
+        users_created_total.inc()
         return UserResponse(
             id=user.id,
             name=user.name,
@@ -245,12 +296,21 @@ async def create_user_endpoint(request: CreateUserRequest) -> UserResponse:
             updated_at=user.updated_at
         )
     except UniqueViolation as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_user").observe(duration)
+        db_errors_total.labels(operation="create_user", error_type="UniqueViolation").inc()
         logger.error(f"User with email {request.email} already exists: {str(e)}")
         raise HTTPException(status_code=409, detail=f"User with email {request.email} already exists")
     except ValueError as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_user").observe(duration)
+        db_errors_total.labels(operation="create_user", error_type="ValueError").inc()
         logger.error(f"Validation error creating user: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_user").observe(duration)
+        db_errors_total.labels(operation="create_user", error_type=type(e).__name__).inc()
         logger.error(f"Unexpected error creating user: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -263,6 +323,7 @@ async def update_user_endpoint(user_id: int, request: UpdateUserRequest) -> User
     All fields are optional. Only provided fields will be updated.
     Returns the updated user object.
     """
+    start_time = time.time()
     try:
         # Check if user exists
         existing_user = get_user_by_id(user_id)
@@ -282,6 +343,9 @@ async def update_user_endpoint(user_id: int, request: UpdateUserRequest) -> User
         if not updated_user:
             raise HTTPException(status_code=404, detail=f"User with id {user_id} not found")
         
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="update_user").observe(duration)
+        
         return UserResponse(
             id=updated_user.id,
             name=updated_user.name,
@@ -293,11 +357,19 @@ async def update_user_endpoint(user_id: int, request: UpdateUserRequest) -> User
             updated_at=updated_user.updated_at
         )
     except HTTPException:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="update_user").observe(duration)
         raise
     except UniqueViolation as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="update_user").observe(duration)
+        db_errors_total.labels(operation="update_user", error_type="UniqueViolation").inc()
         logger.error(f"User with email {request.email} already exists: {str(e)}")
         raise HTTPException(status_code=409, detail=f"User with email {request.email} already exists")
     except Exception as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="update_user").observe(duration)
+        db_errors_total.labels(operation="update_user", error_type=type(e).__name__).inc()
         logger.error(f"Unexpected error updating user: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 

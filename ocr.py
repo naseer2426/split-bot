@@ -1,6 +1,8 @@
 import os
 import httpx
+import time
 from typing import Optional
+from metrics import ocr_processing_duration_seconds, ocr_processing_total, ocr_processing_errors_total
 
 logger = None
 
@@ -9,16 +11,19 @@ def set_logger(logger_instance):
     global logger
     logger = logger_instance
 
-async def _ocr_image_internal(image_data_uri: str) -> Optional[str]:
+async def _ocr_image_internal(image_data_uri: str, source_type: str) -> Optional[str]:
     """
     Internal function to process an image using Mistral OCR API.
     
     Args:
         image_data_uri: The data URI or URL of the image to process (can be a regular URL or data URI).
+        source_type: The source type ('url' or 'base64') for metrics tracking.
         
     Returns:
         The extracted text (markdown) from the image, or an error message string if there was an error.
     """
+    start_time = time.time()
+    
     if logger:
         logger.info(f"Processing image with Mistral OCR: {image_data_uri[:100]}...")
     
@@ -26,6 +31,10 @@ async def _ocr_image_internal(image_data_uri: str) -> Optional[str]:
     api_key = os.getenv('MISTRAL_API_KEY')
     if not api_key:
         error_msg = "MISTRAL_API_KEY is not set in environment variables."
+        duration = time.time() - start_time
+        ocr_processing_duration_seconds.labels(source_type=source_type).observe(duration)
+        ocr_processing_total.labels(source_type=source_type, status="failure").inc()
+        ocr_processing_errors_total.labels(source_type=source_type, error_type="ConfigurationError").inc()
         if logger:
             logger.error(error_msg)
         raise ValueError(error_msg)
@@ -64,11 +73,18 @@ async def _ocr_image_internal(image_data_uri: str) -> Optional[str]:
                 pages = result.get('pages', [])
                 if len(pages) != 1:
                     error_msg = f"Expected exactly 1 page, got {len(pages)}"
+                    duration = time.time() - start_time
+                    ocr_processing_duration_seconds.labels(source_type=source_type).observe(duration)
+                    ocr_processing_total.labels(source_type=source_type, status="failure").inc()
+                    ocr_processing_errors_total.labels(source_type=source_type, error_type="PageCountError").inc()
                     if logger:
                         logger.error(error_msg)
                     return f"Error: {error_msg}"
                 
                 markdown_text = pages[0].get('markdown', 'No text extracted.')
+                duration = time.time() - start_time
+                ocr_processing_duration_seconds.labels(source_type=source_type).observe(duration)
+                ocr_processing_total.labels(source_type=source_type, status="success").inc()
                 if logger:
                     logger.info("OCR processing successful")
                 return markdown_text
@@ -84,22 +100,38 @@ async def _ocr_image_internal(image_data_uri: str) -> Optional[str]:
                 except Exception:
                     error_msg = f"Validation error: {response.text}"
                 
+                duration = time.time() - start_time
+                ocr_processing_duration_seconds.labels(source_type=source_type).observe(duration)
+                ocr_processing_total.labels(source_type=source_type, status="failure").inc()
+                ocr_processing_errors_total.labels(source_type=source_type, error_type="ValidationError").inc()
                 if logger:
                     logger.error(error_msg)
                 return f"Error: {error_msg}"
             else:
                 error_msg = f"OCR API error: {response.status_code} - {response.text}"
+                duration = time.time() - start_time
+                ocr_processing_duration_seconds.labels(source_type=source_type).observe(duration)
+                ocr_processing_total.labels(source_type=source_type, status="failure").inc()
+                ocr_processing_errors_total.labels(source_type=source_type, error_type=f"HTTPError{response.status_code}").inc()
                 if logger:
                     logger.error(error_msg)
                 return f"Error: {error_msg}"
                 
     except httpx.TimeoutException:
         error_msg = "OCR request timed out"
+        duration = time.time() - start_time
+        ocr_processing_duration_seconds.labels(source_type=source_type).observe(duration)
+        ocr_processing_total.labels(source_type=source_type, status="failure").inc()
+        ocr_processing_errors_total.labels(source_type=source_type, error_type="TimeoutError").inc()
         if logger:
             logger.error(error_msg)
         return "Error: Request timed out. Please try again."
     except Exception as e:
         error_msg = f"OCR processing failed: {str(e)}"
+        duration = time.time() - start_time
+        ocr_processing_duration_seconds.labels(source_type=source_type).observe(duration)
+        ocr_processing_total.labels(source_type=source_type, status="failure").inc()
+        ocr_processing_errors_total.labels(source_type=source_type, error_type=type(e).__name__).inc()
         if logger:
             logger.error(error_msg)
         return f"Error: {error_msg}"
@@ -116,7 +148,7 @@ async def ocr_image_url(image_url: str) -> Optional[str]:
     """
     if logger:
         logger.info(f"Processing image URL with Mistral OCR: {image_url}")
-    return await _ocr_image_internal(image_url)
+    return await _ocr_image_internal(image_url, source_type="url")
 
 async def ocr_image_base64(image_base_64: str, image_mtype: str) -> Optional[str]:
     """
@@ -134,4 +166,4 @@ async def ocr_image_base64(image_base_64: str, image_mtype: str) -> Optional[str
     
     # Construct the data URI
     image_data_uri = f"data:{image_mtype};base64,{image_base_64}"
-    return await _ocr_image_internal(image_data_uri)
+    return await _ocr_image_internal(image_data_uri, source_type="base64")
