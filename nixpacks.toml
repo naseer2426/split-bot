@@ -1,2 +1,2 @@
 [phases.build]
-python grafana/push.py
+cmds = ['python grafana/push.py']
