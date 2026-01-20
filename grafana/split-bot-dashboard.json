@@ -104,7 +104,7 @@
                         "type": "prometheus",
                         "uid": "${DS_PROMETHEUS}"
                     },
-                    "expr": "rate(http_requests_total{job=\"splitbot\"}[1m])",
+                    "expr": "rate(http_requests_total{job=\"splitbot\",handler!=\"/metrics\"}[1m])",
                     "refId": "A",
                     "legendFormat": "{{method}} {{handler}}"
                 }
