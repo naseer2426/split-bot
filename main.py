@@ -10,7 +10,13 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from ai import process_message, SplitBotRequest
 from db import connect_db, close_db
 from dotenv import load_dotenv
-from chat_whitelist import init_chat_whitelist_table, search_whitelisted_chat
+from chat_whitelist import (
+    init_chat_whitelist_table, 
+    search_whitelisted_chat,
+    get_all_whitelisted_chats,
+    create_whitelisted_chat,
+    delete_whitelisted_chat
+)
 from splitwise.users import init_users_table, get_all_users, create_user, update_user, get_user_by_id
 from psycopg.errors import UniqueViolation
 from metrics import messages_processed_total, users_created_total, db_query_duration_seconds, db_errors_total
@@ -119,6 +125,24 @@ class UpdateUserRequest(BaseModel):
     telegram_username: Optional[str] = Field(None, description="User's Telegram username")
     whatsapp_number: Optional[str] = Field(None, description="User's WhatsApp number")
     whatsapp_lid: Optional[str] = Field(None, description="User's WhatsApp LID")
+
+
+class WhitelistedChatResponse(BaseModel):
+    """Response model for whitelisted chat data"""
+    id: int = Field(..., description="Whitelisted chat ID")
+    group_id: str = Field(..., description="Group ID")
+    platform_type: str = Field(..., description="Platform type (WHATSAPP or TELEGRAM)")
+    created_at: datetime = Field(..., description="Chat whitelist creation timestamp")
+    updated_at: datetime = Field(..., description="Chat whitelist last update timestamp")
+    
+    class Config:
+        from_attributes = True
+
+
+class CreateWhitelistedChatRequest(BaseModel):
+    """Request model for creating a whitelisted chat"""
+    group_id: str = Field(..., description="The group ID to whitelist")
+    platform_type: str = Field(..., description="Platform type (WHATSAPP or TELEGRAM)")
 
 
 def check_group_whitelisted(group_id: str, platform_type: str) -> bool:
@@ -371,6 +395,130 @@ async def update_user_endpoint(user_id: int, request: UpdateUserRequest) -> User
         db_query_duration_seconds.labels(operation="update_user").observe(duration)
         db_errors_total.labels(operation="update_user", error_type=type(e).__name__).inc()
         logger.error(f"Unexpected error updating user: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/whitelisted-chats", response_model=List[WhitelistedChatResponse])
+async def get_whitelisted_chats(
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of chats to return"),
+    offset: int = Query(0, ge=0, description="Number of chats to skip"),
+    group_id: Optional[str] = Query(None, description="Filter by group ID"),
+    platform_type: Optional[str] = Query(None, description="Filter by platform type (WHATSAPP or TELEGRAM)")
+) -> List[WhitelistedChatResponse]:
+    """
+    Get all whitelisted chats from the database.
+    
+    Supports pagination via limit and offset query parameters.
+    Can filter by group_id and/or platform_type.
+    Returns a list of all whitelisted chats if no limit is specified.
+    """
+    start_time = time.time()
+    try:
+        # If filters are provided, use search function
+        if group_id or platform_type:
+            chats = search_whitelisted_chat(
+                group_id=group_id,
+                platform_type=platform_type
+            )
+            # Apply pagination manually for search results
+            if offset > 0:
+                chats = chats[offset:]
+            if limit:
+                chats = chats[:limit]
+        else:
+            chats = get_all_whitelisted_chats(limit=limit, offset=offset)
+        
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="get_whitelisted_chats").observe(duration)
+        
+        return [WhitelistedChatResponse(
+            id=chat.id,
+            group_id=chat.group_id,
+            platform_type=chat.platform_type,
+            created_at=chat.created_at,
+            updated_at=chat.updated_at
+        ) for chat in chats]
+    except Exception as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="get_whitelisted_chats").observe(duration)
+        db_errors_total.labels(operation="get_whitelisted_chats", error_type=type(e).__name__).inc()
+        logger.error(f"Error getting whitelisted chats: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/whitelisted-chats", response_model=WhitelistedChatResponse, status_code=201)
+async def create_whitelisted_chat_endpoint(request: CreateWhitelistedChatRequest) -> WhitelistedChatResponse:
+    """
+    Create a new whitelisted chat.
+    
+    Requires group_id and platform_type (WHATSAPP or TELEGRAM).
+    Returns the created whitelisted chat object.
+    """
+    start_time = time.time()
+    try:
+        chat = create_whitelisted_chat(
+            group_id=request.group_id,
+            platform_type=request.platform_type
+        )
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
+        
+        return WhitelistedChatResponse(
+            id=chat.id,
+            group_id=chat.group_id,
+            platform_type=chat.platform_type,
+            created_at=chat.created_at,
+            updated_at=chat.updated_at
+        )
+    except UniqueViolation as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
+        db_errors_total.labels(operation="create_whitelisted_chat", error_type="UniqueViolation").inc()
+        logger.error(f"Whitelisted chat with group_id {request.group_id} already exists: {str(e)}")
+        raise HTTPException(
+            status_code=409, 
+            detail=f"Whitelisted chat with group_id {request.group_id} already exists"
+        )
+    except ValueError as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
+        db_errors_total.labels(operation="create_whitelisted_chat", error_type="ValueError").inc()
+        logger.error(f"Validation error creating whitelisted chat: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
+        db_errors_total.labels(operation="create_whitelisted_chat", error_type=type(e).__name__).inc()
+        logger.error(f"Unexpected error creating whitelisted chat: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.delete("/whitelisted-chats/{chat_id}", status_code=204)
+async def delete_whitelisted_chat_endpoint(chat_id: int):
+    """
+    Delete a whitelisted chat by its ID.
+    
+    Returns 204 No Content on success, 404 if the chat doesn't exist.
+    """
+    start_time = time.time()
+    try:
+        deleted = delete_whitelisted_chat(chat_id)
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="delete_whitelisted_chat").observe(duration)
+        
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Whitelisted chat with id {chat_id} not found")
+        
+        return None
+    except HTTPException:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="delete_whitelisted_chat").observe(duration)
+        raise
+    except Exception as e:
+        duration = time.time() - start_time
+        db_query_duration_seconds.labels(operation="delete_whitelisted_chat").observe(duration)
+        db_errors_total.labels(operation="delete_whitelisted_chat", error_type=type(e).__name__).inc()
+        logger.error(f"Unexpected error deleting whitelisted chat: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

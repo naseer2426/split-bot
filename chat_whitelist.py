@@ -199,3 +199,65 @@ def search_whitelisted_chat(
     except Exception as e:
         logger.error(f"Error searching whitelisted chats: {str(e)}")
         raise
+
+
+def get_whitelisted_chat_by_id(chat_id: int) -> Optional[WhitelistedChat]:
+    """
+    Get a whitelisted chat by its ID.
+    
+    Args:
+        chat_id: The ID of the whitelisted chat
+    
+    Returns:
+        Optional[WhitelistedChat]: The whitelisted chat object if found, None otherwise
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, group_id, platform_type, created_at, updated_at
+                FROM split_bot_chat_whitelist
+                WHERE id = %s
+                """,
+                (chat_id,)
+            )
+            row = cur.fetchone()
+            if row:
+                return _row_to_whitelisted_chat(row)
+            return None
+    except Exception as e:
+        logger.error(f"Error getting whitelisted chat by id: {str(e)}")
+        raise
+
+
+def delete_whitelisted_chat(chat_id: int) -> bool:
+    """
+    Delete a whitelisted chat by its ID.
+    
+    Args:
+        chat_id: The ID of the whitelisted chat to delete
+    
+    Returns:
+        bool: True if the chat was deleted, False if it didn't exist
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM split_bot_chat_whitelist
+                WHERE id = %s
+                """,
+                (chat_id,)
+            )
+            deleted_count = cur.rowcount
+            conn.commit()
+            if deleted_count > 0:
+                logger.info(f"Deleted whitelisted chat with id: {chat_id}")
+                return True
+            return False
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error deleting whitelisted chat: {str(e)}")
+        raise
