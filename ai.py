@@ -50,7 +50,7 @@ If users don't naturally follow the steps described here, tell them what you req
 Make sure your answers are succinct, don't be too verbose
 '''
 
-MAX_HISTORY_MESSAGES = 20
+MAX_HISTORY_MESSAGES = 100
 
 class SplitBotRequest:
     def __init__(self, message: str, group_id: str, sender: str, platform_type: str, image_url: Optional[str] = None, image_base64: Optional[Any] = None, bot_name: str = "me"):
