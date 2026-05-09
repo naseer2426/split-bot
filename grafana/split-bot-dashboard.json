@@ -652,7 +652,7 @@
                     },
                     "expr": "rate(messages_processed_total{job=\"splitbot\"}[1m])",
                     "refId": "A",
-                    "legendFormat": "{{platform_type}} - {{whitelisted}} - {{group_id}}"
+                    "legendFormat": "{{platform_type}} - {{group_id}}"
                 }
             ],
             "title": "Messages Processed Rate (by Group)",

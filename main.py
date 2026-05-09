@@ -10,13 +10,6 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from ai import process_message, SplitBotRequest
 from db import connect_db, close_db
 from dotenv import load_dotenv
-from chat_whitelist import (
-    init_chat_whitelist_table, 
-    search_whitelisted_chat,
-    get_all_whitelisted_chats,
-    create_whitelisted_chat,
-    delete_whitelisted_chat
-)
 from splitwise.users import init_users_table, get_all_users, create_user, update_user, get_user_by_id
 from psycopg.errors import UniqueViolation
 from metrics import messages_processed_total, users_created_total, db_query_duration_seconds, db_errors_total
@@ -45,7 +38,6 @@ async def lifespan(app: FastAPI):
         connect_db()
         logger.info("Database connection established on startup")
         init_users_table()
-        init_chat_whitelist_table()
     except Exception as e:
         logger.error(f"Failed to connect to database on startup: {str(e)}")
         raise
@@ -127,47 +119,6 @@ class UpdateUserRequest(BaseModel):
     whatsapp_lid: Optional[str] = Field(None, description="User's WhatsApp LID")
 
 
-class WhitelistedChatResponse(BaseModel):
-    """Response model for whitelisted chat data"""
-    id: int = Field(..., description="Whitelisted chat ID")
-    group_id: str = Field(..., description="Group ID")
-    platform_type: str = Field(..., description="Platform type (WHATSAPP or TELEGRAM)")
-    created_at: datetime = Field(..., description="Chat whitelist creation timestamp")
-    updated_at: datetime = Field(..., description="Chat whitelist last update timestamp")
-    
-    class Config:
-        from_attributes = True
-
-
-class CreateWhitelistedChatRequest(BaseModel):
-    """Request model for creating a whitelisted chat"""
-    group_id: str = Field(..., description="The group ID to whitelist")
-    platform_type: str = Field(..., description="Platform type (WHATSAPP or TELEGRAM)")
-
-
-def check_group_whitelisted(group_id: str, platform_type: str) -> bool:
-    """
-    Check if a group_id is whitelisted for the given platform_type.
-    
-    Args:
-        group_id: The group ID to check
-        platform_type: The platform type (WHATSAPP or TELEGRAM)
-    
-    Returns:
-        bool: True if the group is whitelisted, False otherwise
-    """
-    try:
-        platform_type = platform_type.strip().upper()
-        results = search_whitelisted_chat(
-            group_id=group_id.strip(),
-            platform_type=platform_type
-        )
-        return len(results) > 0
-    except Exception as e:
-        logger.error(f"Error checking whitelist: {str(e)}")
-        return False
-
-
 @app.post("/process_message", response_model=ProcessMessageResponse)
 async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMessageResponse:
     """
@@ -178,26 +129,8 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
     """
     platform_type = request.platform_type.strip().upper()
     group_id = request.group_id.strip()
-    is_whitelisted = False
     
     try:
-        # Check if group is whitelisted
-        if not check_group_whitelisted(group_id, platform_type):
-            not_allowed_resp = f"This chat with ID: {group_id}, is not whitelisted, please ask Naseer to whitelist it"
-            logger.warning(f"Group {group_id} on platform {platform_type} is not whitelisted")
-            # Track non-whitelisted message
-            messages_processed_total.labels(
-                platform_type=platform_type,
-                whitelisted="false",
-                group_id=group_id
-            ).inc()
-            return ProcessMessageResponse(
-                response=not_allowed_resp,
-                error=None
-            )
-        
-        is_whitelisted = True
-        
         # Convert Pydantic model to SplitBotRequest
         split_bot_request = SplitBotRequest(
             message=request.message,
@@ -215,7 +148,6 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
         # Track successful message processing
         messages_processed_total.labels(
             platform_type=platform_type,
-            whitelisted="true",
             group_id=group_id
         ).inc()
         
@@ -228,12 +160,10 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
         # Handle validation errors (e.g., OCR failures)
         logger.error(f"ValueError in process_message: {str(e)}")
         # Track failed message processing
-        if is_whitelisted:
-            messages_processed_total.labels(
-                platform_type=platform_type,
-                whitelisted="true",
-                group_id=group_id
-            ).inc()
+        messages_processed_total.labels(
+            platform_type=platform_type,
+            group_id=group_id
+        ).inc()
         return ProcessMessageResponse(
             response=None,
             error=str(e)
@@ -243,12 +173,10 @@ async def process_message_endpoint(request: ProcessMessageRequest) -> ProcessMes
         # Handle any other unexpected errors
         logger.error(f"Unexpected error in process_message: {str(e)}", exc_info=True)
         # Track failed message processing
-        if is_whitelisted:
-            messages_processed_total.labels(
-                platform_type=platform_type,
-                whitelisted="true",
-                group_id=group_id
-            ).inc()
+        messages_processed_total.labels(
+            platform_type=platform_type,
+            group_id=group_id
+        ).inc()
         return ProcessMessageResponse(
             response=None,
             error=f"Internal server error: {str(e)}"
@@ -395,130 +323,6 @@ async def update_user_endpoint(user_id: int, request: UpdateUserRequest) -> User
         db_query_duration_seconds.labels(operation="update_user").observe(duration)
         db_errors_total.labels(operation="update_user", error_type=type(e).__name__).inc()
         logger.error(f"Unexpected error updating user: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.get("/whitelisted-chats", response_model=List[WhitelistedChatResponse])
-async def get_whitelisted_chats(
-    limit: Optional[int] = Query(None, ge=1, description="Maximum number of chats to return"),
-    offset: int = Query(0, ge=0, description="Number of chats to skip"),
-    group_id: Optional[str] = Query(None, description="Filter by group ID"),
-    platform_type: Optional[str] = Query(None, description="Filter by platform type (WHATSAPP or TELEGRAM)")
-) -> List[WhitelistedChatResponse]:
-    """
-    Get all whitelisted chats from the database.
-    
-    Supports pagination via limit and offset query parameters.
-    Can filter by group_id and/or platform_type.
-    Returns a list of all whitelisted chats if no limit is specified.
-    """
-    start_time = time.time()
-    try:
-        # If filters are provided, use search function
-        if group_id or platform_type:
-            chats = search_whitelisted_chat(
-                group_id=group_id,
-                platform_type=platform_type
-            )
-            # Apply pagination manually for search results
-            if offset > 0:
-                chats = chats[offset:]
-            if limit:
-                chats = chats[:limit]
-        else:
-            chats = get_all_whitelisted_chats(limit=limit, offset=offset)
-        
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="get_whitelisted_chats").observe(duration)
-        
-        return [WhitelistedChatResponse(
-            id=chat.id,
-            group_id=chat.group_id,
-            platform_type=chat.platform_type,
-            created_at=chat.created_at,
-            updated_at=chat.updated_at
-        ) for chat in chats]
-    except Exception as e:
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="get_whitelisted_chats").observe(duration)
-        db_errors_total.labels(operation="get_whitelisted_chats", error_type=type(e).__name__).inc()
-        logger.error(f"Error getting whitelisted chats: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.post("/whitelisted-chats", response_model=WhitelistedChatResponse, status_code=201)
-async def create_whitelisted_chat_endpoint(request: CreateWhitelistedChatRequest) -> WhitelistedChatResponse:
-    """
-    Create a new whitelisted chat.
-    
-    Requires group_id and platform_type (WHATSAPP or TELEGRAM).
-    Returns the created whitelisted chat object.
-    """
-    start_time = time.time()
-    try:
-        chat = create_whitelisted_chat(
-            group_id=request.group_id,
-            platform_type=request.platform_type
-        )
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
-        
-        return WhitelistedChatResponse(
-            id=chat.id,
-            group_id=chat.group_id,
-            platform_type=chat.platform_type,
-            created_at=chat.created_at,
-            updated_at=chat.updated_at
-        )
-    except UniqueViolation as e:
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
-        db_errors_total.labels(operation="create_whitelisted_chat", error_type="UniqueViolation").inc()
-        logger.error(f"Whitelisted chat with group_id {request.group_id} already exists: {str(e)}")
-        raise HTTPException(
-            status_code=409, 
-            detail=f"Whitelisted chat with group_id {request.group_id} already exists"
-        )
-    except ValueError as e:
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
-        db_errors_total.labels(operation="create_whitelisted_chat", error_type="ValueError").inc()
-        logger.error(f"Validation error creating whitelisted chat: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="create_whitelisted_chat").observe(duration)
-        db_errors_total.labels(operation="create_whitelisted_chat", error_type=type(e).__name__).inc()
-        logger.error(f"Unexpected error creating whitelisted chat: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-@app.delete("/whitelisted-chats/{chat_id}", status_code=204)
-async def delete_whitelisted_chat_endpoint(chat_id: int):
-    """
-    Delete a whitelisted chat by its ID.
-    
-    Returns 204 No Content on success, 404 if the chat doesn't exist.
-    """
-    start_time = time.time()
-    try:
-        deleted = delete_whitelisted_chat(chat_id)
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="delete_whitelisted_chat").observe(duration)
-        
-        if not deleted:
-            raise HTTPException(status_code=404, detail=f"Whitelisted chat with id {chat_id} not found")
-        
-        return None
-    except HTTPException:
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="delete_whitelisted_chat").observe(duration)
-        raise
-    except Exception as e:
-        duration = time.time() - start_time
-        db_query_duration_seconds.labels(operation="delete_whitelisted_chat").observe(duration)
-        db_errors_total.labels(operation="delete_whitelisted_chat", error_type=type(e).__name__).inc()
-        logger.error(f"Unexpected error deleting whitelisted chat: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 

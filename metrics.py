@@ -63,7 +63,7 @@ db_errors_total = Counter(
 messages_processed_total = Counter(
     'messages_processed_total',
     'Total number of messages processed',
-    ['platform_type', 'whitelisted', 'group_id']  # whitelisted: true or false
+    ['platform_type', 'group_id']
 )
 
 users_created_total = Counter(

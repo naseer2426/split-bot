@@ -81,7 +81,7 @@ The dashboard includes the following panels:
 4. **AI Processing Rate** - Success/failure rate by platform
 5. **OCR Processing Duration** - p95, p99, and mean latency by source type
 6. **OCR Processing Rate** - Success/failure rate by source type
-7. **Messages Processed Rate** - Rate by group_id, platform, and whitelist
+7. **Messages Processed Rate** - Rate by group_id and platform
    status
 8. **Users Created Rate** - User creation rate over time
 9. **AI Processing Errors** - Error rate by platform and error type
