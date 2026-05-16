@@ -147,7 +147,7 @@ async def process_message(request: SplitBotRequest) -> str:
     try:
         # Initialize ChatOpenAI with OpenRouter configuration
         model = ChatOpenAI(
-            model="google/gemini-3-flash-preview",
+            model="x-ai/grok-4.3",
             base_url=base_url,
             api_key=api_token,
             temperature=0.7,
